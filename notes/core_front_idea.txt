@@ -1,0 +1,6 @@
+- Keep the overall code and architechture clean. Do not add unnecessary files and folder, but add required files and folder, to keep code length in a file moderate and overall code clean.
+- Make sure the UI looks professional, choose colors and theme in such a way, so that it looks a really good and professional grade product.
+- there should be no glitch in the UI, it should be always smooth and fast.
+- UI should always fetch latest state and updates automatically wherever applicable ( this is core of React, so make sure our app is doing this properly) 
+- keep the code extensible. Whenever we intend to expand the present UI, add want to add any new small or large features, code should be flexible and supportive.
+- Name every component well, and keep code well reable.

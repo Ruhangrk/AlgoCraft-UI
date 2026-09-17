@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --color-ink: #0f1419;
+  --color-ink-muted: #5c6b7a;
+  --color-paper: #f4f6f8;
+  --color-panel: #ffffff;
+  --color-line: #d7dee7;
+  --color-accent: #0b6e4f;
+  --color-accent-hover: #095c42;
+  --color-danger: #b42318;
+  --color-warn: #b54708;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    color: var(--color-ink);
+    background:
+      radial-gradient(1200px 600px at 10% -10%, #e8eef5 0%, transparent 55%),
+      radial-gradient(900px 500px at 100% 0%, #e4f0ea 0%, transparent 50%),
+      var(--color-paper);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
