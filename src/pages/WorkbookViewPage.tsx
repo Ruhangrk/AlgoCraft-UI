@@ -1,10 +1,11 @@
-import { useMemo, useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "@/auth/AuthProvider";
 import * as api from "@/api/endpoints";
+import { InstrumentSearch } from "@/components/InstrumentSearch";
+import { WorkbookHistory, type HistoryTab } from "@/features/WorkbookHistory";
 import { formatNs, formatPaise, rupeesToPaise } from "@/lib/format";
-import { mergeWorkbooks, readKnownWorkbooks } from "@/lib/workbookCache";
+import { istDateToNs } from "@/lib/time";
 import { ApiError, type RunStartResponse } from "@/types/api";
 import {
   Button,
@@ -17,21 +18,49 @@ import {
   TextInput,
 } from "@/components/ui";
 
-const DEFAULT_TICKERS = "RELIANCE,INFY,TCS";
+const PREFILL_KEY = "algocraft_prefill_ticker";
+const DEFAULT_TICKERS = ["RELIANCE", "INFY", "TCS"];
 const DEFAULT_STRATEGIES = "ema_crossover,vwap_reversion,opening_range_breakout";
 
 export function WorkbookViewPage() {
   const { workbookId = "" } = useParams();
   const wid = Number(workbookId);
-  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
+  const tab: HistoryTab = searchParams.get("tab") === "backtests" ? "backtests" : "runs";
+
   const [capitalRupees, setCapitalRupees] = useState("");
-  const [tickers, setTickers] = useState(DEFAULT_TICKERS);
+  const [tickers, setTickers] = useState<string[]>(DEFAULT_TICKERS);
   const [strategies, setStrategies] = useState(DEFAULT_STRATEGIES);
   const [router, setRouter] = useState("default_router");
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<RunStartResponse | null>(null);
+
+  const [btTicker, setBtTicker] = useState("RELIANCE");
+  const [btStrategy, setBtStrategy] = useState("ema_crossover");
+  const [btFrom, setBtFrom] = useState("2026-08-28");
+  const [btTo, setBtTo] = useState("2026-09-11");
+  const [btCapital, setBtCapital] = useState("100000");
+  const [btError, setBtError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fromUrl = searchParams.get("ticker")?.toUpperCase();
+    const fromSession = sessionStorage.getItem(PREFILL_KEY)?.toUpperCase() ?? null;
+    const prefill = fromUrl || fromSession;
+    if (!prefill) {
+      return;
+    }
+    setTickers((prev) => (prev.includes(prefill) ? prev : [prefill, ...prev]));
+    setBtTicker(prefill);
+    sessionStorage.removeItem(PREFILL_KEY);
+    if (fromUrl) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("ticker");
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const workbooksQuery = useQuery({
     queryKey: ["workbooks"],
@@ -50,44 +79,33 @@ export function WorkbookViewPage() {
     staleTime: 60_000,
   });
 
-  const known = user ? readKnownWorkbooks(user.id) : [];
-  const workbook = useMemo(() => {
-    const merged = mergeWorkbooks(workbooksQuery.data ?? [], known);
-    return merged.find((w) => w.id === wid) ?? null;
-  }, [workbooksQuery.data, known, wid]);
+  const workbook = useMemo(
+    () => workbooksQuery.data?.find((w) => w.id === wid) ?? null,
+    [workbooksQuery.data, wid],
+  );
 
   const portfolioQuery = useQuery({
     queryKey: ["portfolio", wid],
     queryFn: () => api.getPortfolio(wid),
     enabled: Number.isFinite(wid) && wid > 0,
-    refetchOnWindowFocus: true,
-  });
-
-  const runsQuery = useQuery({
-    queryKey: ["runs", wid],
-    queryFn: () => api.listRuns(wid),
-    enabled: Number.isFinite(wid) && wid > 0,
-    refetchOnWindowFocus: true,
   });
 
   const containersQuery = useQuery({
     queryKey: ["containers", wid],
     queryFn: () => api.listContainers(wid),
-    enabled: Number.isFinite(wid) && wid > 0,
-    refetchOnWindowFocus: true,
+    enabled: Number.isFinite(wid) && wid > 0 && tab === "runs",
   });
 
   const fillsQuery = useQuery({
     queryKey: ["fills", wid],
     queryFn: () => api.listFills(wid),
-    enabled: Number.isFinite(wid) && wid > 0,
-    refetchOnWindowFocus: true,
+    enabled: Number.isFinite(wid) && wid > 0 && tab === "runs",
   });
 
   const startMutation = useMutation({
     mutationFn: () => {
       const body: Parameters<typeof api.startRun>[1] = {
-        tickers: splitCsv(tickers),
+        tickers,
         strategies: splitCsv(strategies),
         router,
       };
@@ -104,224 +122,287 @@ export function WorkbookViewPage() {
       void queryClient.invalidateQueries({ queryKey: ["fills", wid] });
       void queryClient.invalidateQueries({ queryKey: ["portfolio", wid] });
       void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
+      setSearchParams({ tab: "runs" });
+      if (result.run_id > 0) {
+        navigate(`/workbooks/${wid}/runs/${result.run_id}`);
+      }
     },
     onError: (err) => {
       setError(err instanceof ApiError ? err.message : "Run failed");
     },
   });
 
-  function onStart(e: FormEvent) {
+  const backtestMutation = useMutation({
+    mutationFn: () =>
+      api.startBacktest(wid, {
+        ticker: btTicker,
+        strategy: btStrategy,
+        capital_paise: rupeesToPaise(Number(btCapital)),
+        from_ns: istDateToNs(btFrom, false),
+        to_ns: istDateToNs(btTo, true),
+      }),
+    onSuccess: (row) => {
+      setBtError(null);
+      void queryClient.invalidateQueries({ queryKey: ["backtests", wid] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio", wid] });
+      void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
+      setSearchParams({ tab: "backtests" });
+      navigate(`/workbooks/${wid}/backtests/${row.id}`);
+    },
+    onError: (err) => {
+      setBtError(err instanceof ApiError ? err.message : "Backtest failed");
+    },
+  });
+
+  function onStartRun(e: FormEvent) {
     e.preventDefault();
+    if (tickers.length === 0) {
+      setError("Add at least one ticker");
+      return;
+    }
     setLastResult(null);
     startMutation.mutate();
   }
 
+  function onStartBacktest(e: FormEvent) {
+    e.preventDefault();
+    setBtError(null);
+    try {
+      istDateToNs(btFrom, false);
+      istDateToNs(btTo, true);
+    } catch (err) {
+      setBtError(err instanceof Error ? err.message : "Invalid dates");
+      return;
+    }
+    if (!btTicker.trim()) {
+      setBtError("Pick a ticker");
+      return;
+    }
+    backtestMutation.mutate();
+  }
+
+  function setTab(next: HistoryTab) {
+    setSearchParams(next === "runs" ? {} : { tab: next });
+  }
+
   const title = workbook?.name ?? `Workbook ${wid}`;
   const mainPaise = portfolioQuery.data?.main_capital_paise ?? workbook?.main_capital_paise;
-  const availablePaise =
-    portfolioQuery.data?.available_paise ?? workbook?.available_paise;
+  const availablePaise = portfolioQuery.data?.available_paise ?? workbook?.available_paise;
+  const strategyOptions = catalogQuery.data?.strategiesList ?? [];
 
   return (
     <PageShell
       title={title}
-      subtitle="Launch a routing run (synchronous). The UI blocks until the engine returns."
+      subtitle="Capital, launch experiments, and browse permanent history for this workbook."
       actions={
-        <>
-          <Link
-            to="/workbooks"
-            className="text-sm font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-          >
-            ← Workbooks
-          </Link>
-          <Button variant="secondary" type="button" onClick={logout}>
-            Log out
-          </Button>
-        </>
+        <Link
+          to="/workbooks"
+          className="text-sm font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        >
+          ← Workbooks
+        </Link>
       }
     >
       <div className="space-y-6">
         <Panel title="Capital">
           <div className="grid gap-4 sm:grid-cols-3">
             <Stat label="Workbook id" value={String(wid)} />
-            <Stat
-              label="Main"
-              value={mainPaise != null ? formatPaise(mainPaise) : "—"}
-            />
+            <Stat label="Main" value={mainPaise != null ? formatPaise(mainPaise) : "—"} />
             <Stat
               label="Available"
               value={availablePaise != null ? formatPaise(availablePaise) : "—"}
             />
           </div>
-          {portfolioQuery.isError ? (
-            <p className="mt-3 text-xs text-[var(--color-warn)]">
-              Portfolio endpoint unavailable for this id — capital may still be readable from
-              create cache.
-            </p>
-          ) : null}
         </Panel>
 
         <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-          <Panel title="Start routing run">
-            <form className="space-y-3" onSubmit={onStart}>
-              <Field label="Capital (₹)" hint="Optional — defaults to workbook available.">
-                <TextInput
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={capitalRupees}
-                  onChange={(e) => setCapitalRupees(e.target.value)}
-                  placeholder="use available"
-                />
-              </Field>
-              <Field label="Tickers" hint="Comma-separated.">
-                <TextInput value={tickers} onChange={(e) => setTickers(e.target.value)} required />
-              </Field>
-              <Field
-                label="Strategies"
-                hint={
-                  catalogQuery.data
-                    ? `Available: ${catalogQuery.data.strategiesList.join(", ")}`
-                    : undefined
-                }
-              >
-                <TextInput
-                  value={strategies}
-                  onChange={(e) => setStrategies(e.target.value)}
-                  required
-                />
-              </Field>
-              <Field
-                label="Router"
-                hint={
-                  catalogQuery.data
-                    ? `Available: ${catalogQuery.data.routers.join(", ")}`
-                    : undefined
-                }
-              >
-                <TextInput value={router} onChange={(e) => setRouter(e.target.value)} required />
-              </Field>
-              <ErrorBanner message={error} />
-              <Button type="submit" className="w-full" disabled={startMutation.isPending}>
-                {startMutation.isPending ? "Running… (waiting on engine)" : "Start run"}
-              </Button>
-              {lastResult ? (
-                <div className="rounded-lg bg-[var(--color-paper)] px-3 py-2 font-mono text-xs leading-relaxed">
-                  run #{lastResult.run_id} · selected {lastResult.selected} · skipped{" "}
-                  {lastResult.skipped} · fills {lastResult.fills} · returned{" "}
-                  {formatPaise(lastResult.returned_paise)} · signals {lastResult.signals} ·
-                  rejections {lastResult.rejections}
-                </div>
-              ) : null}
-            </form>
-          </Panel>
-
           <div className="space-y-6">
-            <Panel
-              title="Runs"
-              action={
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => void runsQuery.refetch()}
-                  disabled={runsQuery.isFetching}
-                >
-                  Refresh
+            <Panel title="Manual backtest">
+              <form className="space-y-3" onSubmit={onStartBacktest}>
+                <Field label="Stock">
+                  <InstrumentSearch
+                    placeholder="Search ticker…"
+                    onSelect={(inst) => setBtTicker(inst.ticker)}
+                  />
+                  <p className="mt-1 font-mono text-sm font-medium">{btTicker}</p>
+                </Field>
+                <Field label="Strategy">
+                  <select
+                    className="w-full rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+                    value={btStrategy}
+                    onChange={(e) => setBtStrategy(e.target.value)}
+                  >
+                    {(strategyOptions.length ? strategyOptions : [btStrategy]).map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="From">
+                    <TextInput type="date" value={btFrom} onChange={(e) => setBtFrom(e.target.value)} required />
+                  </Field>
+                  <Field label="To">
+                    <TextInput type="date" value={btTo} onChange={(e) => setBtTo(e.target.value)} required />
+                  </Field>
+                </div>
+                <Field label="Capital (₹)">
+                  <TextInput
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={btCapital}
+                    onChange={(e) => setBtCapital(e.target.value)}
+                    required
+                  />
+                </Field>
+                <ErrorBanner message={btError} />
+                <Button type="submit" className="w-full" disabled={backtestMutation.isPending}>
+                  {backtestMutation.isPending ? "Running backtest…" : "Run backtest"}
                 </Button>
-              }
-            >
-              {(runsQuery.data ?? []).length === 0 ? (
-                <EmptyState title="No runs yet" body="Start a run to populate history." />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[480px] text-left text-sm">
-                    <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
-                      <tr>
-                        <th className="pb-2 font-medium">Id</th>
-                        <th className="pb-2 font-medium">Router</th>
-                        <th className="pb-2 font-medium">Selected</th>
-                        <th className="pb-2 font-medium">Fills</th>
-                        <th className="pb-2 font-medium">Returned</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[var(--color-line)]">
-                      {runsQuery.data?.map((run) => (
-                        <tr key={run.id}>
-                          <td className="py-2 font-mono">{run.id}</td>
-                          <td className="py-2">{run.router}</td>
-                          <td className="py-2 font-mono">{run.selected}</td>
-                          <td className="py-2 font-mono">{run.fills}</td>
-                          <td className="py-2 font-mono">{formatPaise(run.returned_paise)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              </form>
             </Panel>
 
-            <Panel title="Containers">
-              {(containersQuery.data ?? []).length === 0 ? (
-                <EmptyState title="No containers" body="Containers appear after a successful run." />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-left text-sm">
-                    <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
-                      <tr>
-                        <th className="pb-2 font-medium">Id</th>
-                        <th className="pb-2 font-medium">Ticker</th>
-                        <th className="pb-2 font-medium">Strategy</th>
-                        <th className="pb-2 font-medium">Mode</th>
-                        <th className="pb-2 font-medium">Fills</th>
-                        <th className="pb-2 font-medium">Realized</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[var(--color-line)]">
-                      {containersQuery.data?.map((c) => (
-                        <tr key={c.id}>
-                          <td className="py-2 font-mono">{c.id}</td>
-                          <td className="py-2 font-medium">{c.ticker}</td>
-                          <td className="py-2">{c.strategy}</td>
-                          <td className="py-2 font-mono text-xs">{c.mode}</td>
-                          <td className="py-2 font-mono">{c.fills}</td>
-                          <td className="py-2 font-mono">{formatPaise(c.realized_paise)}</td>
-                        </tr>
+            <Panel title="Routing run">
+              <form className="space-y-3" onSubmit={onStartRun}>
+                <Field label="Capital (₹)" hint="Optional — defaults to workbook available.">
+                  <TextInput
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={capitalRupees}
+                    onChange={(e) => setCapitalRupees(e.target.value)}
+                    placeholder="use available"
+                  />
+                </Field>
+                <Field label="Tickers" hint="Search NSE catalog and add symbols.">
+                  <InstrumentSearch
+                    placeholder="Add stock…"
+                    onSelect={(inst) =>
+                      setTickers((prev) =>
+                        prev.includes(inst.ticker) ? prev : [...prev, inst.ticker],
+                      )
+                    }
+                  />
+                  {tickers.length > 0 ? (
+                    <ul className="mt-2 flex flex-wrap gap-1.5">
+                      {tickers.map((t) => (
+                        <li key={t}>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)] px-2 py-0.5 font-mono text-xs hover:border-[var(--color-danger)]"
+                            onClick={() => setTickers((prev) => prev.filter((x) => x !== t))}
+                            title="Remove"
+                          >
+                            {t}
+                            <span aria-hidden>×</span>
+                          </button>
+                        </li>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-xs text-[var(--color-warn)]">No tickers selected</p>
+                  )}
+                </Field>
+                <Field label="Strategies">
+                  <TextInput
+                    value={strategies}
+                    onChange={(e) => setStrategies(e.target.value)}
+                    required
+                  />
+                </Field>
+                <Field label="Router">
+                  <TextInput value={router} onChange={(e) => setRouter(e.target.value)} required />
+                </Field>
+                <ErrorBanner message={error} />
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={startMutation.isPending || tickers.length === 0}
+                >
+                  {startMutation.isPending ? "Running… (waiting on engine)" : "Start run"}
+                </Button>
+                {lastResult ? (
+                  <div className="rounded-lg bg-[var(--color-paper)] px-3 py-2 font-mono text-xs leading-relaxed">
+                    run #{lastResult.run_id} · selected {lastResult.selected} · fills{" "}
+                    {lastResult.fills} · returned {formatPaise(lastResult.returned_paise)}
+                  </div>
+                ) : null}
+              </form>
+            </Panel>
+          </div>
+
+          <div className="space-y-4">
+            <Panel title="History">
+              <WorkbookHistory workbookId={wid} tab={tab} onTabChange={setTab} />
             </Panel>
 
-            <Panel title="Fills">
-              {(fillsQuery.data ?? []).length === 0 ? (
-                <EmptyState title="No fills" body="Fill history for this workbook." />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-left text-sm">
-                    <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
-                      <tr>
-                        <th className="pb-2 font-medium">Time</th>
-                        <th className="pb-2 font-medium">Ticker</th>
-                        <th className="pb-2 font-medium">Side</th>
-                        <th className="pb-2 font-medium">Qty</th>
-                        <th className="pb-2 font-medium">Price</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[var(--color-line)]">
-                      {fillsQuery.data?.map((f, i) => (
-                        <tr key={`${f.timestamp_ns}-${i}`}>
-                          <td className="py-2 font-mono text-xs">{formatNs(f.timestamp_ns)}</td>
-                          <td className="py-2 font-medium">{f.ticker}</td>
-                          <td className="py-2 font-mono text-xs">{f.side}</td>
-                          <td className="py-2 font-mono">{f.qty}</td>
-                          <td className="py-2 font-mono">{formatPaise(f.price_paise)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </Panel>
+            {tab === "runs" ? (
+              <>
+                <Panel title="Containers (workbook)">
+                  {(containersQuery.data ?? []).length === 0 ? (
+                    <EmptyState title="No containers" body="Appear after a successful run." />
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[520px] text-left text-sm">
+                        <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
+                          <tr>
+                            <th className="pb-2 font-medium">Id</th>
+                            <th className="pb-2 font-medium">Ticker</th>
+                            <th className="pb-2 font-medium">Strategy</th>
+                            <th className="pb-2 font-medium">Mode</th>
+                            <th className="pb-2 font-medium">Realized</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[var(--color-line)]">
+                          {containersQuery.data?.map((c) => (
+                            <tr key={c.id}>
+                              <td className="py-2 font-mono">{c.id}</td>
+                              <td className="py-2 font-medium">{c.ticker}</td>
+                              <td className="py-2">{c.strategy}</td>
+                              <td className="py-2 font-mono text-xs">{c.mode}</td>
+                              <td className="py-2 font-mono">{formatPaise(c.realized_paise)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </Panel>
+
+                <Panel title="Fills (workbook)">
+                  {(fillsQuery.data ?? []).length === 0 ? (
+                    <EmptyState title="No fills" body="Fill history for this workbook." />
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[520px] text-left text-sm">
+                        <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
+                          <tr>
+                            <th className="pb-2 font-medium">Time</th>
+                            <th className="pb-2 font-medium">Ticker</th>
+                            <th className="pb-2 font-medium">Side</th>
+                            <th className="pb-2 font-medium">Qty</th>
+                            <th className="pb-2 font-medium">Price</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[var(--color-line)]">
+                          {fillsQuery.data?.map((f, i) => (
+                            <tr key={`${f.timestamp_ns}-${i}`}>
+                              <td className="py-2 font-mono text-xs">{formatNs(f.timestamp_ns)}</td>
+                              <td className="py-2 font-medium">{f.ticker}</td>
+                              <td className="py-2 font-mono text-xs">{f.side}</td>
+                              <td className="py-2 font-mono">{f.qty}</td>
+                              <td className="py-2 font-mono">{formatPaise(f.price_paise)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </Panel>
+              </>
+            ) : null}
           </div>
         </div>
       </div>

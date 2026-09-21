@@ -1,10 +1,8 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "@/auth/AuthProvider";
 import * as api from "@/api/endpoints";
 import { formatPaise, rupeesToPaise } from "@/lib/format";
-import { mergeWorkbooks, readKnownWorkbooks, rememberWorkbook } from "@/lib/workbookCache";
 import { ApiError } from "@/types/api";
 import {
   Button,
@@ -16,12 +14,21 @@ import {
   TextInput,
 } from "@/components/ui";
 
+const PREFILL_KEY = "algocraft_prefill_ticker";
+
 export function WorkbookListPage() {
-  const { user, logout } = useAuth();
   const queryClient = useQueryClient();
   const [name, setName] = useState("NSE Workspace");
   const [capitalRupees, setCapitalRupees] = useState("100000");
   const [error, setError] = useState<string | null>(null);
+  const [prefill, setPrefill] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = sessionStorage.getItem(PREFILL_KEY);
+    if (t) {
+      setPrefill(t.toUpperCase());
+    }
+  }, []);
 
   const listQuery = useQuery({
     queryKey: ["workbooks"],
@@ -29,27 +36,9 @@ export function WorkbookListPage() {
     refetchOnWindowFocus: true,
   });
 
-  const known = useMemo(
-    () => (user ? readKnownWorkbooks(user.id) : []),
-    [user, listQuery.dataUpdatedAt],
-  );
-
-  const workbooks = useMemo(
-    () => mergeWorkbooks(listQuery.data ?? [], known),
-    [listQuery.data, known],
-  );
-
   const createMutation = useMutation({
     mutationFn: () => api.createWorkbook(name.trim(), rupeesToPaise(Number(capitalRupees))),
-    onSuccess: (created) => {
-      if (user) {
-        rememberWorkbook(user.id, {
-          id: created.id,
-          name: created.name,
-          main_capital_paise: created.capital_paise,
-          available_paise: created.capital_paise,
-        });
-      }
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
       setError(null);
     },
@@ -63,19 +52,19 @@ export function WorkbookListPage() {
     createMutation.mutate();
   }
 
+  const workbooks = listQuery.data ?? [];
+
   return (
     <PageShell
       title="Workbooks"
-      subtitle="Isolated capital pools. Open one to launch runs and inspect results."
-      actions={
-        <>
-          <span className="text-sm text-[var(--color-ink-muted)]">{user?.username}</span>
-          <Button variant="secondary" type="button" onClick={logout}>
-            Log out
-          </Button>
-        </>
-      }
+      subtitle="Isolated capital pools. Open one to launch runs and inspect history."
     >
+      {prefill ? (
+        <div className="mb-4 rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm">
+          Prefill ticker <span className="font-mono font-medium">{prefill}</span> — open a workbook
+          to add it to the run launcher.
+        </div>
+      ) : null}
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
         <Panel title="New workbook">
           <form className="space-y-3" onSubmit={onCreate}>
@@ -117,12 +106,15 @@ export function WorkbookListPage() {
           ) : workbooks.length === 0 ? (
             <EmptyState
               title="No workbooks yet"
-              body="Create one on the left. If the API list stays empty after create, the UI keeps a local cache so you can still open it."
+              body="Create one on the left. Lists come from GET /workbooks."
             />
           ) : (
             <ul className="divide-y divide-[var(--color-line)]">
               {workbooks.map((wb) => (
-                <li key={wb.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                <li
+                  key={wb.id}
+                  className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+                >
                   <div>
                     <Link
                       to={`/workbooks/${wb.id}`}

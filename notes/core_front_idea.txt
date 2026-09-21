@@ -4,3 +4,8 @@
 - UI should always fetch latest state and updates automatically wherever applicable ( this is core of React, so make sure our app is doing this properly) 
 - keep the code extensible. Whenever we intend to expand the present UI, add want to add any new small or large features, code should be flexible and supportive.
 - Name every component well, and keep code well reable.
+- UI is display + commands only — never encode trading, risk, or capital rules in the frontend; AlgoCraft is the source of truth.
+- Money stays in paise and timestamps in ns until the view layer; format for display, never for API payloads.
+- Prefer one clear data path (API client → Query/hooks → pages); avoid duplicate fetches and ad-hoc state for the same resource.
+- Match UI features to live backend endpoints; stub only when we explicitly decide to — no half-wired screens that look done.
+- Keep accessibility and keyboard paths for primary actions (login, start run, stop) — professional ≠ pretty only.

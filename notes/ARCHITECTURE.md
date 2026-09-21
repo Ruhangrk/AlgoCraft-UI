@@ -1,7 +1,9 @@
 # AlgoCraft-UI — Architecture & Phases
 
-Companion to `../AlgoCraft/Notes/` (especially `ARCHITECTURE.md` Phase 8 / API §4.12–4.16, `IMPLEMENTATION.md` Phase 8).  
+Companion to `../AlgoCraft/Notes/` (especially `ARCHITECTURE.md` Phase 8 / API §4.12–4.16, `IMPLEMENTATION.md` Phase 8, `CODEMAP.md`).  
 Backend Phase 5 is complete enough to start the UI. This repo owns the React frontend only.
+
+**Next joint work (FE + BE):** see [`JOINT_ROADMAP.md`](./JOINT_ROADMAP.md) — Crow API adoption, NSE universe, charts, manual backtest, history, event tracing.
 
 ---
 
@@ -94,16 +96,16 @@ Source of truth: `../AlgoCraft/src/api/http_server.cpp`.
 
 ### Quirks that shape UX
 
-1. **`runs/start` is synchronous** — blocks until `RunManager::execute` finishes; response is a summary. No async job / poll yet; no `.../stop`.
-2. **`/ws/workbooks/{wid}/portfolio` and `.../containers`** are currently HTTP GET snapshots, not streaming WebSockets.
-3. **Not implemented yet vs Phase 8 notes:** `GET/PATCH/DELETE /workbooks/{wid}`, chart API, manual backtest/paper, soft-delete, admin, kill-container, real WS push.
-4. **`POST /workbooks` returns 201 but `GET /workbooks` may still return `[]`** (observed 2026-09-18). UI merges a per-user local cache (`workbookCache`) so created workbooks remain openable until the C++ list bug is fixed.
+1. **`runs/start` is synchronous** — blocks until the engine finishes; UI shows “Running…” then opens run detail.
+2. **Crow WS** exists for portfolio/containers snapshots; UI still uses HTTP invalidate after runs (WS optional later).
+3. **Run events** via `GET .../runs/{id}/events` (signals/rejections/fills/routing/lifecycle). Backtest event timeline not in API yet.
+4. **`GET /workbooks` works after create** (verified 2026-09-21). Local `workbookCache` removed in FE-0.
 
-UI phases U0–U3 target the ready surface only. Later phases wait on (or mock) missing APIs.
+See [`JOINT_ROADMAP.md`](./JOINT_ROADMAP.md) for FE-0…FE-5.
 
-### API smoke (2026-09-18)
+### API smoke (2026-09-21)
 
-Confirmed against `http://127.0.0.1:8080`: `/strategies`, `/routing-algos`, `/auth/register`, `/auth/me`, `POST /workbooks` all OK.
+Crow on `:8080`: register/me, create+list workbooks, strategies, routing-algos OK. CORS `*`.
 
 ---
 
