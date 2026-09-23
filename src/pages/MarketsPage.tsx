@@ -17,8 +17,7 @@ export function MarketsPage() {
           onSelect={(inst) => navigate(`/markets/${inst.ticker}`)}
         />
         <p className="mt-3 text-xs text-[var(--color-ink-muted)]">
-          Catalog from AlgoCraft <span className="font-mono">GET /instruments</span>. Results are
-          cached in TanStack Query for this session.
+          Empty field shows top 30 popular (A–Z). Type to search the full NSE catalog via AlgoCraft.
         </p>
       </Panel>
     </PageShell>

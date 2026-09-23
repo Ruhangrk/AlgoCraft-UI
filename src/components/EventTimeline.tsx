@@ -19,23 +19,87 @@ const ALL_ON: Record<RunEventLayer, boolean> = {
   lifecycle: true,
 };
 
+type SideFilter = "all" | "buy" | "sell";
+
+function eventTicker(ev: RunEvent): string {
+  return ev.data.ticker ?? "";
+}
+
+function eventSide(ev: RunEvent): string | null {
+  if (ev.type !== "fill") {
+    return null;
+  }
+  return String(ev.data.side ?? "").toUpperCase();
+}
+
+function normalizeSideToken(side: string): "buy" | "sell" | "other" {
+  const s = side.toUpperCase();
+  if (s === "BUY" || s === "B" || s === "LONG") {
+    return "buy";
+  }
+  if (s === "SELL" || s === "S" || s === "SHORT") {
+    return "sell";
+  }
+  return "other";
+}
+
 export function EventTimeline({
   events,
   loading,
   error,
+  /** Limit which layer toggles appear (e.g. omit routing on container timelines). */
+  layerOptions = LAYERS,
 }: {
   events: RunEvent[] | undefined;
   loading?: boolean;
   error?: string | null;
+  layerOptions?: { id: RunEventLayer; label: string }[];
 }) {
-  const [layers, setLayers] = useState(ALL_ON);
+  const [layers, setLayers] = useState(() => {
+    const init = { ...ALL_ON };
+    for (const key of Object.keys(init) as RunEventLayer[]) {
+      if (!layerOptions.some((l) => l.id === key)) {
+        init[key] = false;
+      }
+    }
+    return init;
+  });
+  const [ticker, setTicker] = useState<string>("all");
+  const [side, setSide] = useState<SideFilter>("all");
+
+  const tickers = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of events ?? []) {
+      const t = eventTicker(e);
+      if (t) {
+        set.add(t);
+      }
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [events]);
 
   const visible = useMemo(() => {
     if (!events) {
       return [];
     }
-    return events.filter((e) => layers[e.type]);
-  }, [events, layers]);
+    return events.filter((e) => {
+      if (!layers[e.type]) {
+        return false;
+      }
+      if (ticker !== "all" && eventTicker(e) !== ticker) {
+        return false;
+      }
+      if (side !== "all") {
+        // Buy/sell only applies to fills; other layers drop out when side is constrained.
+        const fillSide = eventSide(e);
+        if (fillSide == null) {
+          return false;
+        }
+        return normalizeSideToken(fillSide) === side;
+      }
+      return true;
+    });
+  }, [events, layers, ticker, side]);
 
   const counts = useMemo(() => {
     const c: Record<RunEventLayer, number> = {
@@ -46,10 +110,19 @@ export function EventTimeline({
       lifecycle: 0,
     };
     for (const e of events ?? []) {
+      if (ticker !== "all" && eventTicker(e) !== ticker) {
+        continue;
+      }
+      if (side !== "all") {
+        const fillSide = eventSide(e);
+        if (fillSide == null || normalizeSideToken(fillSide) !== side) {
+          continue;
+        }
+      }
       c[e.type] += 1;
     }
     return c;
-  }, [events]);
+  }, [events, ticker, side]);
 
   function toggle(id: RunEventLayer) {
     setLayers((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -74,8 +147,43 @@ export function EventTimeline({
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-xs text-[var(--color-ink-muted)]">
+          Instrument
+          <select
+            className="rounded-md border border-[var(--color-line)] bg-white px-2 py-1.5 text-sm text-[var(--color-ink)] outline-none focus:border-[var(--color-accent)]"
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value)}
+          >
+            <option value="all">All</option>
+            {tickers.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-[var(--color-ink-muted)]">
+          Side
+          <select
+            className="rounded-md border border-[var(--color-line)] bg-white px-2 py-1.5 text-sm text-[var(--color-ink)] outline-none focus:border-[var(--color-accent)]"
+            value={side}
+            onChange={(e) => setSide(e.target.value as SideFilter)}
+          >
+            <option value="all">All</option>
+            <option value="buy">Buy only</option>
+            <option value="sell">Sell only</option>
+          </select>
+        </label>
+        {side !== "all" ? (
+          <p className="pb-1.5 text-[10px] text-[var(--color-ink-muted)]">
+            Side filter shows fill events only
+          </p>
+        ) : null}
+      </div>
+
       <div className="flex flex-wrap gap-1.5">
-        {LAYERS.map(({ id, label }) => {
+        {layerOptions.map(({ id, label }) => {
           const on = layers[id];
           return (
             <button
@@ -97,7 +205,10 @@ export function EventTimeline({
       </div>
 
       {visible.length === 0 ? (
-        <EmptyState title="Nothing in these layers" body="Turn on another layer above." />
+        <EmptyState
+          title="Nothing matches filters"
+          body="Widen instrument/side or turn on another event layer."
+        />
       ) : (
         <ol className="max-h-[28rem] space-y-0 overflow-y-auto border-l border-[var(--color-line)] pl-4">
           {visible.map((ev) => (

@@ -16,6 +16,7 @@ import type {
   RunSummary,
   User,
   Workbook,
+  WorkbookCapitalTopUp,
   WorkbookCreateResponse,
 } from "@/types/api";
 
@@ -79,6 +80,17 @@ export function createWorkbook(name: string, capital_paise: number): Promise<Wor
   });
 }
 
+/** Top-up workbook main + available capital (paise). */
+export function addWorkbookCapital(
+  workbookId: number,
+  add_capital_paise: number,
+): Promise<WorkbookCapitalTopUp> {
+  return apiFetch<WorkbookCapitalTopUp>(`/workbooks/${workbookId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ add_capital_paise }),
+  });
+}
+
 export function getPortfolio(workbookId: number): Promise<PortfolioSnapshot> {
   return apiFetch<PortfolioSnapshot>(`/workbooks/${workbookId}/portfolio`);
 }
@@ -99,6 +111,21 @@ export function startRun(workbookId: number, body: RunStartRequest): Promise<Run
 
 export function listContainers(workbookId: number): Promise<ContainerRow[]> {
   return apiFetch<ContainerRow[]>(`/workbooks/${workbookId}/containers`);
+}
+
+export function getContainer(workbookId: number, containerId: number): Promise<ContainerRow> {
+  return apiFetch<ContainerRow>(`/workbooks/${workbookId}/containers/${containerId}`);
+}
+
+export function listContainerEvents(
+  workbookId: number,
+  containerId: number,
+  include = "all",
+): Promise<RunEvent[]> {
+  const q = new URLSearchParams({ include });
+  return apiFetch<RunEvent[]>(
+    `/workbooks/${workbookId}/containers/${containerId}/events?${q}`,
+  );
 }
 
 export function listFills(workbookId: number): Promise<FillRow[]> {
@@ -147,8 +174,12 @@ export function listRunEvents(
   workbookId: number,
   runId: number,
   include = "all",
+  containerId?: number,
 ): Promise<RunEvent[]> {
   const q = new URLSearchParams({ include });
+  if (containerId != null && containerId > 0) {
+    q.set("container_id", String(containerId));
+  }
   return apiFetch<RunEvent[]>(`/workbooks/${workbookId}/runs/${runId}/events?${q}`);
 }
 

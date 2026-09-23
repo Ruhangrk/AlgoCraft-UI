@@ -24,6 +24,14 @@ export interface WorkbookCreateResponse {
   capital_paise: number;
 }
 
+export interface WorkbookCapitalTopUp {
+  id: number;
+  name: string;
+  main_capital_paise: number;
+  available_paise: number;
+  added_paise: number;
+}
+
 export interface PortfolioSnapshot {
   workbook_id: number;
   main_capital_paise: number;
@@ -70,11 +78,16 @@ export interface RunStartResponse {
 
 export interface ContainerRow {
   id: number;
+  run_id?: number;
+  workbook_id?: number;
   ticker: string;
   strategy: string;
   mode: string;
-  fills: number;
+  /** Capital allocated to this container (paise). */
+  allocation_paise?: number;
   realized_paise: number;
+  fills: number;
+  created_at?: string;
 }
 
 export interface FillRow {
@@ -149,6 +162,9 @@ export interface OhlcvResponse {
 
 /** Layers accepted by GET .../runs/{id}/events?include= */
 export type RunEventLayer = "signal" | "rejection" | "fill" | "routing" | "lifecycle";
+
+/** Layers on container timelines (no routing — those rows have no container_id). */
+export type ContainerEventLayer = "signal" | "rejection" | "fill" | "lifecycle";
 
 export interface RunEventSignalData {
   id: number;

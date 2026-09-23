@@ -45,6 +45,13 @@ export function WorkbookViewPage() {
   const [btCapital, setBtCapital] = useState("100000");
   const [btError, setBtError] = useState<string | null>(null);
 
+  const [rechargeRupees, setRechargeRupees] = useState("100000");
+  const [rechargeError, setRechargeError] = useState<string | null>(null);
+  const [rechargeOk, setRechargeOk] = useState<string | null>(null);
+
+  const [fillTicker, setFillTicker] = useState<string>("all");
+  const [fillSide, setFillSide] = useState<"all" | "buy" | "sell">("all");
+
   useEffect(() => {
     const fromUrl = searchParams.get("ticker")?.toUpperCase();
     const fromSession = sessionStorage.getItem(PREFILL_KEY)?.toUpperCase() ?? null;
@@ -102,6 +109,33 @@ export function WorkbookViewPage() {
     enabled: Number.isFinite(wid) && wid > 0 && tab === "runs",
   });
 
+  const fillTickers = useMemo(() => {
+    const set = new Set<string>();
+    for (const f of fillsQuery.data ?? []) {
+      if (f.ticker) {
+        set.add(f.ticker);
+      }
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [fillsQuery.data]);
+
+  const filteredFills = useMemo(() => {
+    const rows = fillsQuery.data ?? [];
+    return rows.filter((f) => {
+      if (fillTicker !== "all" && f.ticker !== fillTicker) {
+        return false;
+      }
+      if (fillSide === "all") {
+        return true;
+      }
+      const s = String(f.side ?? "").toUpperCase();
+      if (fillSide === "buy") {
+        return s === "BUY" || s === "B" || s === "LONG";
+      }
+      return s === "SELL" || s === "S" || s === "SHORT";
+    });
+  }, [fillsQuery.data, fillTicker, fillSide]);
+
   const startMutation = useMutation({
     mutationFn: () => {
       const body: Parameters<typeof api.startRun>[1] = {
@@ -143,14 +177,27 @@ export function WorkbookViewPage() {
       }),
     onSuccess: (row) => {
       setBtError(null);
+      // Simulated capital only — workbook balance unchanged.
       void queryClient.invalidateQueries({ queryKey: ["backtests", wid] });
-      void queryClient.invalidateQueries({ queryKey: ["portfolio", wid] });
-      void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
       setSearchParams({ tab: "backtests" });
       navigate(`/workbooks/${wid}/backtests/${row.id}`);
     },
     onError: (err) => {
       setBtError(err instanceof ApiError ? err.message : "Backtest failed");
+    },
+  });
+
+  const rechargeMutation = useMutation({
+    mutationFn: () => api.addWorkbookCapital(wid, rupeesToPaise(Number(rechargeRupees))),
+    onSuccess: (row) => {
+      setRechargeError(null);
+      setRechargeOk(`Added ${formatPaise(row.added_paise)} · available now ${formatPaise(row.available_paise)}`);
+      void queryClient.invalidateQueries({ queryKey: ["portfolio", wid] });
+      void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
+    },
+    onError: (err) => {
+      setRechargeOk(null);
+      setRechargeError(err instanceof ApiError ? err.message : "Recharge failed");
     },
   });
 
@@ -178,7 +225,23 @@ export function WorkbookViewPage() {
       setBtError("Pick a ticker");
       return;
     }
+    if (!(Number(btCapital) > 0)) {
+      setBtError("Simulated capital must be positive");
+      return;
+    }
     backtestMutation.mutate();
+  }
+
+  function onRecharge(e: FormEvent) {
+    e.preventDefault();
+    setRechargeError(null);
+    setRechargeOk(null);
+    const amt = Number(rechargeRupees);
+    if (!(amt > 0)) {
+      setRechargeError("Enter a positive amount in ₹");
+      return;
+    }
+    rechargeMutation.mutate();
   }
 
   function setTab(next: HistoryTab) {
@@ -189,6 +252,16 @@ export function WorkbookViewPage() {
   const mainPaise = portfolioQuery.data?.main_capital_paise ?? workbook?.main_capital_paise;
   const availablePaise = portfolioQuery.data?.available_paise ?? workbook?.available_paise;
   const strategyOptions = catalogQuery.data?.strategiesList ?? [];
+  const routerOptions = catalogQuery.data?.routers ?? [];
+
+  useEffect(() => {
+    if (routerOptions.length === 0) {
+      return;
+    }
+    if (!routerOptions.includes(router)) {
+      setRouter(routerOptions[0]);
+    }
+  }, [routerOptions, router]);
 
   return (
     <PageShell
@@ -213,6 +286,25 @@ export function WorkbookViewPage() {
               value={availablePaise != null ? formatPaise(availablePaise) : "—"}
             />
           </div>
+          <form className="mt-4 flex flex-wrap items-end gap-3 border-t border-[var(--color-line)] pt-4" onSubmit={onRecharge}>
+            <Field label="Recharge (₹)" hint="Adds to main + available (for routing runs).">
+              <TextInput
+                type="number"
+                min={1}
+                step={1}
+                value={rechargeRupees}
+                onChange={(e) => setRechargeRupees(e.target.value)}
+                required
+              />
+            </Field>
+            <Button type="submit" disabled={rechargeMutation.isPending}>
+              {rechargeMutation.isPending ? "Adding…" : "Add capital"}
+            </Button>
+            <ErrorBanner message={rechargeError} />
+            {rechargeOk ? (
+              <p className="w-full text-sm text-[var(--color-gain)]">{rechargeOk}</p>
+            ) : null}
+          </form>
         </Panel>
 
         <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
@@ -247,7 +339,10 @@ export function WorkbookViewPage() {
                     <TextInput type="date" value={btTo} onChange={(e) => setBtTo(e.target.value)} required />
                   </Field>
                 </div>
-                <Field label="Capital (₹)">
+                <Field
+                  label="Simulated capital (₹)"
+                  hint="Paper starting capital for this backtest only — not taken from the workbook."
+                >
                   <TextInput
                     type="number"
                     min={1}
@@ -313,13 +408,33 @@ export function WorkbookViewPage() {
                   />
                 </Field>
                 <Field label="Router">
-                  <TextInput value={router} onChange={(e) => setRouter(e.target.value)} required />
+                  <select
+                    className="w-full rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+                    value={routerOptions.includes(router) ? router : ""}
+                    onChange={(e) => setRouter(e.target.value)}
+                    required
+                    disabled={catalogQuery.isLoading || routerOptions.length === 0}
+                  >
+                    {routerOptions.length === 0 ? (
+                      <option value="">
+                        {catalogQuery.isLoading ? "Loading routers…" : "No routers available"}
+                      </option>
+                    ) : (
+                      routerOptions.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))
+                    )}
+                  </select>
                 </Field>
                 <ErrorBanner message={error} />
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={startMutation.isPending || tickers.length === 0}
+                  disabled={
+                    startMutation.isPending || tickers.length === 0 || !router || routerOptions.length === 0
+                  }
                 >
                   {startMutation.isPending ? "Running… (waiting on engine)" : "Start run"}
                 </Button>
@@ -345,23 +460,49 @@ export function WorkbookViewPage() {
                     <EmptyState title="No containers" body="Appear after a successful run." />
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[520px] text-left text-sm">
+                      <table className="w-full min-w-[600px] text-left text-sm">
                         <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
                           <tr>
                             <th className="pb-2 font-medium">Id</th>
+                            <th className="pb-2 font-medium">Run</th>
                             <th className="pb-2 font-medium">Ticker</th>
                             <th className="pb-2 font-medium">Strategy</th>
                             <th className="pb-2 font-medium">Mode</th>
+                            <th className="pb-2 font-medium">Allocation</th>
                             <th className="pb-2 font-medium">Realized</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[var(--color-line)]">
                           {containersQuery.data?.map((c) => (
-                            <tr key={c.id}>
-                              <td className="py-2 font-mono">{c.id}</td>
+                            <tr key={c.id} className="hover:bg-[var(--color-paper)]">
+                              <td className="py-2 font-mono">
+                                <Link
+                                  className="text-[var(--color-accent)] hover:underline"
+                                  to={`/workbooks/${wid}/containers/${c.id}`}
+                                >
+                                  {c.id}
+                                </Link>
+                              </td>
+                              <td className="py-2 font-mono text-xs">
+                                {c.run_id != null ? (
+                                  <Link
+                                    className="text-[var(--color-accent)] hover:underline"
+                                    to={`/workbooks/${wid}/runs/${c.run_id}`}
+                                  >
+                                    {c.run_id}
+                                  </Link>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
                               <td className="py-2 font-medium">{c.ticker}</td>
                               <td className="py-2">{c.strategy}</td>
                               <td className="py-2 font-mono text-xs">{c.mode}</td>
+                              <td className="py-2 font-mono">
+                                {c.allocation_paise != null
+                                  ? formatPaise(c.allocation_paise)
+                                  : "—"}
+                              </td>
                               <td className="py-2 font-mono">{formatPaise(c.realized_paise)}</td>
                             </tr>
                           ))}
@@ -375,29 +516,74 @@ export function WorkbookViewPage() {
                   {(fillsQuery.data ?? []).length === 0 ? (
                     <EmptyState title="No fills" body="Fill history for this workbook." />
                   ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[520px] text-left text-sm">
-                        <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
-                          <tr>
-                            <th className="pb-2 font-medium">Time</th>
-                            <th className="pb-2 font-medium">Ticker</th>
-                            <th className="pb-2 font-medium">Side</th>
-                            <th className="pb-2 font-medium">Qty</th>
-                            <th className="pb-2 font-medium">Price</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[var(--color-line)]">
-                          {fillsQuery.data?.map((f, i) => (
-                            <tr key={`${f.timestamp_ns}-${i}`}>
-                              <td className="py-2 font-mono text-xs">{formatNs(f.timestamp_ns)}</td>
-                              <td className="py-2 font-medium">{f.ticker}</td>
-                              <td className="py-2 font-mono text-xs">{f.side}</td>
-                              <td className="py-2 font-mono">{f.qty}</td>
-                              <td className="py-2 font-mono">{formatPaise(f.price_paise)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="flex flex-col gap-1 text-xs text-[var(--color-ink-muted)]">
+                          Instrument
+                          <select
+                            className="rounded-md border border-[var(--color-line)] bg-white px-2 py-1.5 text-sm text-[var(--color-ink)] outline-none focus:border-[var(--color-accent)]"
+                            value={fillTicker}
+                            onChange={(e) => setFillTicker(e.target.value)}
+                          >
+                            <option value="all">All</option>
+                            {fillTickers.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex flex-col gap-1 text-xs text-[var(--color-ink-muted)]">
+                          Side
+                          <select
+                            className="rounded-md border border-[var(--color-line)] bg-white px-2 py-1.5 text-sm text-[var(--color-ink)] outline-none focus:border-[var(--color-accent)]"
+                            value={fillSide}
+                            onChange={(e) =>
+                              setFillSide(e.target.value as "all" | "buy" | "sell")
+                            }
+                          >
+                            <option value="all">All</option>
+                            <option value="buy">Buy only</option>
+                            <option value="sell">Sell only</option>
+                          </select>
+                        </label>
+                        <p className="pb-1.5 font-mono text-[10px] text-[var(--color-ink-muted)]">
+                          {filteredFills.length} / {(fillsQuery.data ?? []).length}
+                        </p>
+                      </div>
+                      {filteredFills.length === 0 ? (
+                        <EmptyState
+                          title="No fills match"
+                          body="Widen instrument or side filters."
+                        />
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full min-w-[520px] text-left text-sm">
+                            <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
+                              <tr>
+                                <th className="pb-2 font-medium">Time</th>
+                                <th className="pb-2 font-medium">Ticker</th>
+                                <th className="pb-2 font-medium">Side</th>
+                                <th className="pb-2 font-medium">Qty</th>
+                                <th className="pb-2 font-medium">Price</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[var(--color-line)]">
+                              {filteredFills.map((f, i) => (
+                                <tr key={`${f.timestamp_ns}-${i}`}>
+                                  <td className="py-2 font-mono text-xs">
+                                    {formatNs(f.timestamp_ns)}
+                                  </td>
+                                  <td className="py-2 font-medium">{f.ticker}</td>
+                                  <td className="py-2 font-mono text-xs">{f.side}</td>
+                                  <td className="py-2 font-mono">{f.qty}</td>
+                                  <td className="py-2 font-mono">{formatPaise(f.price_paise)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   )}
                 </Panel>

@@ -11,6 +11,7 @@ import { MarketsPage } from "@/pages/MarketsPage";
 import { StockDetailPage } from "@/pages/StockDetailPage";
 import { BacktestDetailPage } from "@/pages/BacktestDetailPage";
 import { RunDetailPage } from "@/pages/RunDetailPage";
+import { ContainerDetailPage } from "@/pages/ContainerDetailPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -53,6 +54,10 @@ export default function App() {
                   element={<BacktestDetailPage />}
                 />
                 <Route path="/workbooks/:workbookId/runs/:runId" element={<RunDetailPage />} />
+                <Route
+                  path="/workbooks/:workbookId/containers/:containerId"
+                  element={<ContainerDetailPage />}
+                />
                 <Route path="/markets" element={<MarketsPage />} />
                 <Route path="/markets/:ticker" element={<StockDetailPage />} />
               </Route>

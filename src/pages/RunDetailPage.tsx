@@ -26,6 +26,10 @@ export function RunDetailPage() {
     enabled: Number.isFinite(wid) && wid > 0,
   });
 
+  const runContainers = (containersQuery.data ?? []).filter(
+    (c) => c.run_id == null || c.run_id === rid,
+  );
+
   const eventsQuery = useQuery({
     queryKey: ["run-events", wid, rid],
     queryFn: () => api.listRunEvents(wid, rid, "all"),
@@ -145,31 +149,42 @@ export function RunDetailPage() {
           </Panel>
 
           <Panel title="Containers">
-            {(containersQuery.data ?? []).length === 0 ? (
+            {runContainers.length === 0 ? (
               <EmptyState
                 title="No containers"
-                body="Containers for this workbook appear after a run."
+                body="Containers for this run appear after selection."
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] text-left text-sm">
+                <table className="w-full min-w-[560px] text-left text-sm">
                   <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
                     <tr>
                       <th className="pb-2 font-medium">Id</th>
                       <th className="pb-2 font-medium">Ticker</th>
                       <th className="pb-2 font-medium">Strategy</th>
                       <th className="pb-2 font-medium">Mode</th>
+                      <th className="pb-2 font-medium">Allocation</th>
                       <th className="pb-2 font-medium">Fills</th>
                       <th className="pb-2 font-medium">Realized</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--color-line)]">
-                    {containersQuery.data?.map((c) => (
-                      <tr key={c.id}>
-                        <td className="py-2 font-mono">{c.id}</td>
+                    {runContainers.map((c) => (
+                      <tr key={c.id} className="hover:bg-[var(--color-paper)]">
+                        <td className="py-2 font-mono">
+                          <Link
+                            className="text-[var(--color-accent)] hover:underline"
+                            to={`/workbooks/${workbookId}/containers/${c.id}`}
+                          >
+                            {c.id}
+                          </Link>
+                        </td>
                         <td className="py-2 font-medium">{c.ticker}</td>
                         <td className="py-2">{c.strategy}</td>
                         <td className="py-2 font-mono text-xs">{c.mode}</td>
+                        <td className="py-2 font-mono">
+                          {c.allocation_paise != null ? formatPaise(c.allocation_paise) : "—"}
+                        </td>
                         <td className="py-2 font-mono">{c.fills}</td>
                         <td className="py-2 font-mono">{formatPaise(c.realized_paise)}</td>
                       </tr>
