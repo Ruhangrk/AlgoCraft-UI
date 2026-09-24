@@ -57,6 +57,16 @@ export function calendarDaysInclusive(from: string, to: string): number {
   return Math.floor((b - a) / 86_400_000) + 1;
 }
 
+/** Civil YYYY-MM-DD in Asia/Kolkata (IST). */
+export function istTodayYmd(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 export function formatReturnPct(returnPct: number): string {
   const sign = returnPct > 0 ? "+" : "";
   return `${sign}${returnPct.toFixed(2)}%`;

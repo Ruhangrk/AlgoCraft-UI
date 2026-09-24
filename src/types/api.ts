@@ -59,11 +59,20 @@ export interface RunStartRequest {
   tickers?: string[];
   strategies?: string[];
   router?: string;
+  /** NSE session day YYYY-MM-DD. Today → live; past → hist_replay. */
+  anchor_date?: string;
+  /** Prior closed sessions used for router eval / per-symbol backtests. */
+  eval_sessions?: number;
+  /** Optional IST session window HH:MM (defaults to full session on backend). */
+  trade_from?: string;
+  trade_to?: string;
   from_ns?: number;
   to_ns?: number;
   trade_from_ns?: number;
   trade_to_ns?: number;
 }
+
+export type RunMode = "live" | "hist_replay" | string;
 
 export interface RunStartResponse {
   run_id: number;
@@ -74,6 +83,20 @@ export interface RunStartResponse {
   returned_paise: number;
   signals: number;
   rejections: number;
+  mode?: RunMode;
+  live?: boolean;
+  anchor_date?: string;
+  eval_sessions?: number;
+  eval_from_ns?: number;
+  eval_to_ns?: number;
+  trade_from_ns?: number;
+  trade_to_ns?: number;
+}
+
+export interface RunStopResponse {
+  workbook_id: number;
+  stopped: boolean;
+  run_id: number;
 }
 
 export interface ContainerRow {

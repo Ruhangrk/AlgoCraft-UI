@@ -4,8 +4,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/api/endpoints";
 import { InstrumentSearch } from "@/components/InstrumentSearch";
 import { WorkbookHistory, type HistoryTab } from "@/features/WorkbookHistory";
+import { useWorkbookStatusSockets } from "@/hooks/useWorkbookStatusSockets";
 import { formatNs, formatPaise, rupeesToPaise } from "@/lib/format";
-import { istDateToNs } from "@/lib/time";
+import { istDateToNs, istTodayYmd } from "@/lib/time";
 import { ApiError, type RunStartResponse } from "@/types/api";
 import {
   Button,
@@ -21,6 +22,8 @@ import {
 const PREFILL_KEY = "algocraft_prefill_ticker";
 const DEFAULT_TICKERS = ["RELIANCE", "INFY", "TCS"];
 const DEFAULT_STRATEGIES = "ema_crossover,vwap_reversion,opening_range_breakout";
+const DEFAULT_TRADE_FROM = "09:15";
+const DEFAULT_TRADE_TO = "15:30";
 
 export function WorkbookViewPage() {
   const { workbookId = "" } = useParams();
@@ -35,6 +38,12 @@ export function WorkbookViewPage() {
   const [tickers, setTickers] = useState<string[]>(DEFAULT_TICKERS);
   const [strategies, setStrategies] = useState(DEFAULT_STRATEGIES);
   const [router, setRouter] = useState("default_router");
+  const [anchorDate, setAnchorDate] = useState(() => istTodayYmd());
+  const [evalSessions, setEvalSessions] = useState("14");
+  const [tradeFrom, setTradeFrom] = useState(DEFAULT_TRADE_FROM);
+  const [tradeTo, setTradeTo] = useState(DEFAULT_TRADE_TO);
+  const [useSessionWindow, setUseSessionWindow] = useState(true);
+  const [liveActive, setLiveActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<RunStartResponse | null>(null);
 
@@ -68,6 +77,11 @@ export function WorkbookViewPage() {
       setSearchParams(next, { replace: true });
     }
   }, [searchParams, setSearchParams]);
+
+  useWorkbookStatusSockets(wid, Number.isFinite(wid) && wid > 0);
+
+  const todayIst = istTodayYmd();
+  const isLiveAnchor = anchorDate === todayIst;
 
   const workbooksQuery = useQuery({
     queryKey: ["workbooks"],
@@ -142,9 +156,15 @@ export function WorkbookViewPage() {
         tickers,
         strategies: splitCsv(strategies),
         router,
+        anchor_date: anchorDate,
+        eval_sessions: Math.max(1, Number(evalSessions) || 14),
       };
       if (capitalRupees.trim()) {
         body.capital_paise = rupeesToPaise(Number(capitalRupees));
+      }
+      if (useSessionWindow) {
+        body.trade_from = tradeFrom || DEFAULT_TRADE_FROM;
+        body.trade_to = tradeTo || DEFAULT_TRADE_TO;
       }
       return api.startRun(wid, body);
     },
@@ -157,12 +177,34 @@ export function WorkbookViewPage() {
       void queryClient.invalidateQueries({ queryKey: ["portfolio", wid] });
       void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
       setSearchParams({ tab: "runs" });
-      if (result.run_id > 0) {
+
+      const live = result.mode === "live" && result.live === true;
+      setLiveActive(live);
+      if (!live && result.run_id > 0) {
         navigate(`/workbooks/${wid}/runs/${result.run_id}`);
       }
     },
     onError: (err) => {
       setError(err instanceof ApiError ? err.message : "Run failed");
+    },
+  });
+
+  const stopMutation = useMutation({
+    mutationFn: () => api.stopRun(wid),
+    onSuccess: (res) => {
+      setLiveActive(false);
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["runs", wid] });
+      void queryClient.invalidateQueries({ queryKey: ["containers", wid] });
+      void queryClient.invalidateQueries({ queryKey: ["fills", wid] });
+      void queryClient.invalidateQueries({ queryKey: ["portfolio", wid] });
+      void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
+      if (res.run_id > 0) {
+        navigate(`/workbooks/${wid}/runs/${res.run_id}`);
+      }
+    },
+    onError: (err) => {
+      setError(err instanceof ApiError ? err.message : "Stop failed");
     },
   });
 
@@ -361,7 +403,75 @@ export function WorkbookViewPage() {
 
             <Panel title="Routing run">
               <form className="space-y-3" onSubmit={onStartRun}>
-                <Field label="Capital (₹)" hint="Optional — defaults to workbook available.">
+                <Field
+                  label="Anchor day"
+                  hint={
+                    isLiveAnchor
+                      ? "Equals IST today → live Upstox tape until you stop."
+                      : "Past session → hist replay (eval window shifts back from this day)."
+                  }
+                >
+                  <TextInput
+                    type="date"
+                    value={anchorDate}
+                    onChange={(e) => setAnchorDate(e.target.value)}
+                    required
+                    disabled={liveActive}
+                  />
+                </Field>
+                <p className="font-mono text-[10px] text-[var(--color-ink-muted)]">
+                  Mode: {isLiveAnchor ? "live" : "hist_replay"} · IST today {todayIst}
+                </p>
+                <Field
+                  label="Eval sessions"
+                  hint="Prior closed days the router uses to score strategies (e.g. 14 or 20)."
+                >
+                  <TextInput
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={evalSessions}
+                    onChange={(e) => setEvalSessions(e.target.value)}
+                    required
+                    disabled={liveActive}
+                  />
+                </Field>
+                <label className="flex items-center gap-2 text-sm text-[var(--color-ink)]">
+                  <input
+                    type="checkbox"
+                    checked={useSessionWindow}
+                    disabled={liveActive}
+                    onChange={(e) => setUseSessionWindow(e.target.checked)}
+                  />
+                  Limit trade window (IST)
+                </label>
+                {useSessionWindow ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Trade from">
+                      <TextInput
+                        type="time"
+                        value={tradeFrom}
+                        onChange={(e) => setTradeFrom(e.target.value)}
+                        required
+                        disabled={liveActive}
+                      />
+                    </Field>
+                    <Field label="Trade to">
+                      <TextInput
+                        type="time"
+                        value={tradeTo}
+                        onChange={(e) => setTradeTo(e.target.value)}
+                        required
+                        disabled={liveActive}
+                      />
+                    </Field>
+                  </div>
+                ) : (
+                  <p className="text-xs text-[var(--color-ink-muted)]">
+                    Full NSE session used for the trade day.
+                  </p>
+                )}
+                <Field label="Capital (₹)" hint="Optional — defaults to workbook available. Borrowed for the run.">
                   <TextInput
                     type="number"
                     min={0}
@@ -369,11 +479,13 @@ export function WorkbookViewPage() {
                     value={capitalRupees}
                     onChange={(e) => setCapitalRupees(e.target.value)}
                     placeholder="use available"
+                    disabled={liveActive}
                   />
                 </Field>
                 <Field label="Tickers" hint="Search NSE catalog and add symbols.">
                   <InstrumentSearch
                     placeholder="Add stock…"
+                    disabled={liveActive}
                     onSelect={(inst) =>
                       setTickers((prev) =>
                         prev.includes(inst.ticker) ? prev : [...prev, inst.ticker],
@@ -386,7 +498,8 @@ export function WorkbookViewPage() {
                         <li key={t}>
                           <button
                             type="button"
-                            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)] px-2 py-0.5 font-mono text-xs hover:border-[var(--color-danger)]"
+                            disabled={liveActive}
+                            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)] px-2 py-0.5 font-mono text-xs hover:border-[var(--color-danger)] disabled:opacity-50"
                             onClick={() => setTickers((prev) => prev.filter((x) => x !== t))}
                             title="Remove"
                           >
@@ -405,15 +518,16 @@ export function WorkbookViewPage() {
                     value={strategies}
                     onChange={(e) => setStrategies(e.target.value)}
                     required
+                    disabled={liveActive}
                   />
                 </Field>
                 <Field label="Router">
                   <select
-                    className="w-full rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+                    className="w-full rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
                     value={routerOptions.includes(router) ? router : ""}
                     onChange={(e) => setRouter(e.target.value)}
                     required
-                    disabled={catalogQuery.isLoading || routerOptions.length === 0}
+                    disabled={liveActive || catalogQuery.isLoading || routerOptions.length === 0}
                   >
                     {routerOptions.length === 0 ? (
                       <option value="">
@@ -429,19 +543,56 @@ export function WorkbookViewPage() {
                   </select>
                 </Field>
                 <ErrorBanner message={error} />
-                <Button
-                  type="submit"
-                  className="w-full"
-                  disabled={
-                    startMutation.isPending || tickers.length === 0 || !router || routerOptions.length === 0
-                  }
-                >
-                  {startMutation.isPending ? "Running… (waiting on engine)" : "Start run"}
-                </Button>
+                {liveActive ? (
+                  <div className="space-y-2">
+                    <p className="rounded-lg border border-[var(--color-accent)] bg-[var(--color-paper)] px-3 py-2 text-sm text-[var(--color-ink)]">
+                      Live run active — portfolio &amp; containers update over WebSocket. Capital
+                      settles when you stop.
+                    </p>
+                    <Button
+                      type="button"
+                      className="w-full"
+                      variant="secondary"
+                      disabled={stopMutation.isPending}
+                      onClick={() => stopMutation.mutate()}
+                    >
+                      {stopMutation.isPending ? "Stopping…" : "Stop live run"}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="submit"
+                    className="w-full"
+                    disabled={
+                      startMutation.isPending ||
+                      tickers.length === 0 ||
+                      !router ||
+                      routerOptions.length === 0
+                    }
+                  >
+                    {startMutation.isPending
+                      ? isLiveAnchor
+                        ? "Starting live…"
+                        : "Running hist replay…"
+                      : isLiveAnchor
+                        ? "Start live run (today)"
+                        : "Start hist replay"}
+                  </Button>
+                )}
                 {lastResult ? (
                   <div className="rounded-lg bg-[var(--color-paper)] px-3 py-2 font-mono text-xs leading-relaxed">
-                    run #{lastResult.run_id} · selected {lastResult.selected} · fills{" "}
-                    {lastResult.fills} · returned {formatPaise(lastResult.returned_paise)}
+                    {lastResult.mode ?? "run"}
+                    {lastResult.live ? " · live" : ""}
+                    {lastResult.run_id > 0 ? ` · run #${lastResult.run_id}` : " · run pending stop"}
+                    {" · "}
+                    selected {lastResult.selected} · fills {lastResult.fills}
+                    {lastResult.anchor_date ? ` · anchor ${lastResult.anchor_date}` : ""}
+                    {lastResult.eval_sessions != null
+                      ? ` · eval ${lastResult.eval_sessions}`
+                      : ""}
+                    {lastResult.mode !== "live"
+                      ? ` · returned ${formatPaise(lastResult.returned_paise)}`
+                      : null}
                   </div>
                 ) : null}
               </form>

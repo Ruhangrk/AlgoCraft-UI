@@ -13,6 +13,7 @@ import type {
   RunEvent,
   RunStartRequest,
   RunStartResponse,
+  RunStopResponse,
   RunSummary,
   User,
   Workbook,
@@ -106,6 +107,12 @@ export function startRun(workbookId: number, body: RunStartRequest): Promise<Run
   return apiFetch<RunStartResponse>(`/workbooks/${workbookId}/runs/start`, {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export function stopRun(workbookId: number): Promise<RunStopResponse> {
+  return apiFetch<RunStopResponse>(`/workbooks/${workbookId}/runs/stop`, {
+    method: "POST",
   });
 }
 
