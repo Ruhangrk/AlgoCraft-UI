@@ -5,6 +5,7 @@ import * as api from "@/api/endpoints";
 import { CandleChart } from "@/components/CandleChart";
 import { InstrumentSearch } from "@/components/InstrumentSearch";
 import { EmptyState, Field, PageShell, Panel, Stat, TextInput } from "@/components/ui";
+import { PrefKeys, loadJson, saveJson } from "@/lib/prefs";
 import {
   calendarDaysInclusive,
   istDateTimeToNs,
@@ -23,9 +24,8 @@ const TF_OPTIONS: { id: ChartResolution; label: string }[] = [
 const MAX_1M_DAYS = 3;
 const DEFAULT_FROM_TIME = "00:00";
 const DEFAULT_TO_TIME = "23:59";
-const RANGE_CACHE_KEY = "algocraft_chart_range";
 
-type ChartRangeCache = {
+type ChartRangePref = {
   resolution: ChartResolution;
   from: string;
   to: string;
@@ -59,30 +59,18 @@ function monthsAgoYmd(months: number): string {
   return `${y}-${m}-${day}`;
 }
 
-function readRangeCache(): ChartRangeCache | null {
-  try {
-    const raw = sessionStorage.getItem(RANGE_CACHE_KEY);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as ChartRangeCache;
-    if (!parsed?.from || !parsed?.to || !parsed?.resolution) {
-      return null;
-    }
-    return {
-      resolution: parsed.resolution,
-      from: parsed.from,
-      to: parsed.to,
-      fromTime: parsed.fromTime || DEFAULT_FROM_TIME,
-      toTime: parsed.toTime || DEFAULT_TO_TIME,
-    };
-  } catch {
+function readChartPref(): ChartRangePref | null {
+  const parsed = loadJson<ChartRangePref>(PrefKeys.chartRange);
+  if (!parsed?.from || !parsed?.to || !parsed?.resolution) {
     return null;
   }
-}
-
-function writeRangeCache(range: ChartRangeCache): void {
-  sessionStorage.setItem(RANGE_CACHE_KEY, JSON.stringify(range));
+  return {
+    resolution: parsed.resolution,
+    from: parsed.from,
+    to: parsed.to,
+    fromTime: parsed.fromTime || DEFAULT_FROM_TIME,
+    toTime: parsed.toTime || DEFAULT_TO_TIME,
+  };
 }
 
 function filterCandlesByIstWindow(
@@ -119,7 +107,7 @@ export function StockDetailPage() {
   const navigate = useNavigate();
   const symbol = ticker.toUpperCase();
 
-  const cached = useMemo(() => readRangeCache(), []);
+  const cached = useMemo(() => readChartPref(), []);
 
   const [resolution, setResolution] = useState<ChartResolution>(
     () => cached?.resolution ?? "1d",
@@ -130,7 +118,7 @@ export function StockDetailPage() {
   const [toTime, setToTime] = useState(() => cached?.toTime ?? DEFAULT_TO_TIME);
 
   useEffect(() => {
-    writeRangeCache({ resolution, from, to, fromTime, toTime });
+    saveJson(PrefKeys.chartRange, { resolution, from, to, fromTime, toTime });
   }, [resolution, from, to, fromTime, toTime]);
 
   function selectResolution(next: ChartResolution) {

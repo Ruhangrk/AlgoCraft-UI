@@ -3,11 +3,14 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/api/endpoints";
 import { formatPaise } from "@/lib/format";
+import { clearJson, PrefKeys, loadJson, saveJson } from "@/lib/prefs";
 import { formatReturnPct } from "@/lib/time";
 import { ApiError, type BacktestRow, type RunSummary } from "@/types/api";
 import { Button, EmptyState, Field, TextInput } from "@/components/ui";
 
 const PAGE = 40;
+
+type HistoryFilterPref = { from?: string; to?: string };
 
 export type HistoryTab = "runs" | "backtests";
 
@@ -28,12 +31,24 @@ export function WorkbookHistory({
   onTabChange: (tab: HistoryTab) => void;
 }) {
   const queryClient = useQueryClient();
+  const historyPref = useMemo(
+    () => loadJson<HistoryFilterPref>(PrefKeys.historyFilter),
+    [],
+  );
   const [q, setQ] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [from, setFrom] = useState(() => historyPref?.from ?? "");
+  const [to, setTo] = useState(() => historyPref?.to ?? "");
   const [cursor, setCursor] = useState(0);
   const [extraRuns, setExtraRuns] = useState<RunSummary[]>([]);
   const [extraBts, setExtraBts] = useState<BacktestRow[]>([]);
+
+  useEffect(() => {
+    if (!from && !to) {
+      clearJson(PrefKeys.historyFilter);
+      return;
+    }
+    saveJson(PrefKeys.historyFilter, { from, to });
+  }, [from, to]);
 
   useEffect(() => {
     setCursor(0);

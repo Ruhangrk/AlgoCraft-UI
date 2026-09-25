@@ -6,6 +6,7 @@ import { InstrumentSearch } from "@/components/InstrumentSearch";
 import { WorkbookHistory, type HistoryTab } from "@/features/WorkbookHistory";
 import { useWorkbookStatusSockets } from "@/hooks/useWorkbookStatusSockets";
 import { formatNs, formatPaise, rupeesToPaise } from "@/lib/format";
+import { PrefKeys, loadJson, saveJson } from "@/lib/prefs";
 import { istDateToNs, istTodayYmd } from "@/lib/time";
 import { ApiError, type RunStartResponse } from "@/types/api";
 import {
@@ -38,19 +39,44 @@ export function WorkbookViewPage() {
   const [tickers, setTickers] = useState<string[]>(DEFAULT_TICKERS);
   const [strategies, setStrategies] = useState(DEFAULT_STRATEGIES);
   const [router, setRouter] = useState("default_router");
-  const [anchorDate, setAnchorDate] = useState(() => istTodayYmd());
-  const [evalSessions, setEvalSessions] = useState("14");
-  const [tradeFrom, setTradeFrom] = useState(DEFAULT_TRADE_FROM);
-  const [tradeTo, setTradeTo] = useState(DEFAULT_TRADE_TO);
-  const [useSessionWindow, setUseSessionWindow] = useState(true);
+  const routingPref = useMemo(
+    () => loadJson<{
+      anchorDate?: string;
+      evalSessions?: string;
+      tradeFrom?: string;
+      tradeTo?: string;
+      useSessionWindow?: boolean;
+    }>(PrefKeys.routingRun),
+    [],
+  );
+  const backtestPref = useMemo(
+    () => loadJson<{ from?: string; to?: string }>(PrefKeys.backtestDates),
+    [],
+  );
+
+  const [anchorDate, setAnchorDate] = useState(
+    () => routingPref?.anchorDate || istTodayYmd(),
+  );
+  const [evalSessions, setEvalSessions] = useState(
+    () => routingPref?.evalSessions || "14",
+  );
+  const [tradeFrom, setTradeFrom] = useState(
+    () => routingPref?.tradeFrom || DEFAULT_TRADE_FROM,
+  );
+  const [tradeTo, setTradeTo] = useState(
+    () => routingPref?.tradeTo || DEFAULT_TRADE_TO,
+  );
+  const [useSessionWindow, setUseSessionWindow] = useState(
+    () => routingPref?.useSessionWindow ?? true,
+  );
   const [liveActive, setLiveActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<RunStartResponse | null>(null);
 
   const [btTicker, setBtTicker] = useState("RELIANCE");
   const [btStrategy, setBtStrategy] = useState("ema_crossover");
-  const [btFrom, setBtFrom] = useState("2026-08-28");
-  const [btTo, setBtTo] = useState("2026-09-11");
+  const [btFrom, setBtFrom] = useState(() => backtestPref?.from || "2026-08-28");
+  const [btTo, setBtTo] = useState(() => backtestPref?.to || "2026-09-11");
   const [btCapital, setBtCapital] = useState("100000");
   const [btError, setBtError] = useState<string | null>(null);
 
@@ -60,6 +86,20 @@ export function WorkbookViewPage() {
 
   const [fillTicker, setFillTicker] = useState<string>("all");
   const [fillSide, setFillSide] = useState<"all" | "buy" | "sell">("all");
+
+  useEffect(() => {
+    saveJson(PrefKeys.routingRun, {
+      anchorDate,
+      evalSessions,
+      tradeFrom,
+      tradeTo,
+      useSessionWindow,
+    });
+  }, [anchorDate, evalSessions, tradeFrom, tradeTo, useSessionWindow]);
+
+  useEffect(() => {
+    saveJson(PrefKeys.backtestDates, { from: btFrom, to: btTo });
+  }, [btFrom, btTo]);
 
   useEffect(() => {
     const fromUrl = searchParams.get("ticker")?.toUpperCase();

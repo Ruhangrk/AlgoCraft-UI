@@ -2,9 +2,16 @@ import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import * as api from "@/api/endpoints";
 import { ActivityResultHeader } from "@/components/ActivityResultHeader";
+import { EventTimeline } from "@/components/EventTimeline";
 import { formatNs, formatPaise } from "@/lib/format";
-import { ApiError } from "@/types/api";
+import { ApiError, type RunEventLayer } from "@/types/api";
 import { EmptyState, PageShell, Panel, Stat } from "@/components/ui";
+
+const BACKTEST_LAYERS: { id: RunEventLayer; label: string }[] = [
+  { id: "signal", label: "Signals" },
+  { id: "rejection", label: "Rejections" },
+  { id: "fill", label: "Fills" },
+];
 
 function resolveReturnPct(row: { return_pct?: number; return_pct_bp: number }): number {
   if (typeof row.return_pct === "number") {
@@ -24,7 +31,19 @@ export function BacktestDetailPage() {
     enabled: Number.isFinite(wid) && wid > 0 && Number.isFinite(bid) && bid > 0,
   });
 
+  const eventsQuery = useQuery({
+    queryKey: ["backtest-events", wid, bid],
+    queryFn: () => api.listBacktestEvents(wid, bid, "all"),
+    enabled: Number.isFinite(wid) && wid > 0 && Number.isFinite(bid) && bid > 0,
+  });
+
   const row = detailQuery.data;
+  const eventsError =
+    eventsQuery.error instanceof ApiError
+      ? eventsQuery.error.message
+      : eventsQuery.isError
+        ? "Failed to load events"
+        : null;
 
   return (
     <PageShell
@@ -74,9 +93,11 @@ export function BacktestDetailPage() {
           </Panel>
 
           <Panel title="Events">
-            <EmptyState
-              title="No backtest event API yet"
-              body="Manual backtests store summary metrics only. Open a routing run to inspect signals, rejections, fills, routing, and lifecycle."
+            <EventTimeline
+              events={eventsQuery.data}
+              loading={eventsQuery.isLoading}
+              error={eventsError}
+              layerOptions={BACKTEST_LAYERS}
             />
           </Panel>
         </div>

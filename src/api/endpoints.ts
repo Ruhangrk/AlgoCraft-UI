@@ -169,6 +169,17 @@ export function getBacktest(workbookId: number, backtestId: number): Promise<Bac
   return apiFetch<BacktestRow>(`/workbooks/${workbookId}/backtests/${backtestId}`);
 }
 
+export function listBacktestEvents(
+  workbookId: number,
+  backtestId: number,
+  include: string = "all",
+): Promise<RunEvent[]> {
+  const q = new URLSearchParams({ include });
+  return apiFetch<RunEvent[]>(
+    `/workbooks/${workbookId}/backtests/${backtestId}/events?${q}`,
+  );
+}
+
 export function deleteBacktest(workbookId: number, backtestId: number): Promise<{ id: number; deleted: boolean }> {
   return apiFetch(`/workbooks/${workbookId}/backtests/${backtestId}`, { method: "DELETE" });
 }
