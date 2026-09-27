@@ -1,6 +1,8 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/api/endpoints";
+import { EventGraphToggle, EventPriceChart, eventSpanNs } from "@/components/EventPriceChart";
 import { EventTimeline } from "@/components/EventTimeline";
 import { formatPaise } from "@/lib/format";
 import { ApiError } from "@/types/api";
@@ -13,6 +15,8 @@ export function RunDetailPage() {
   const rid = Number(runId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [showGraph, setShowGraph] = useState(false);
+  const [graphTicker, setGraphTicker] = useState<string>("");
 
   const runsQuery = useQuery({
     queryKey: ["runs", wid],
@@ -53,6 +57,25 @@ export function RunDetailPage() {
       : eventsQuery.isError
         ? "Failed to load events"
         : null;
+
+  const tickers = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of runContainers) {
+      if (c.ticker) {
+        set.add(c.ticker);
+      }
+    }
+    for (const e of eventsQuery.data ?? []) {
+      const t = e.data.ticker;
+      if (t) {
+        set.add(t);
+      }
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [runContainers, eventsQuery.data]);
+
+  const activeTicker = graphTicker || tickers[0] || "";
+  const span = useMemo(() => eventSpanNs(eventsQuery.data), [eventsQuery.data]);
 
   return (
     <PageShell
@@ -195,7 +218,40 @@ export function RunDetailPage() {
             )}
           </Panel>
 
-          <Panel title="Events">
+          <Panel
+            title="Events"
+            action={
+              <div className="flex flex-wrap items-center gap-2">
+                {tickers.length > 1 ? (
+                  <select
+                    className="rounded-md border border-[var(--color-line)] bg-white px-2 py-1.5 text-sm"
+                    value={activeTicker}
+                    onChange={(e) => setGraphTicker(e.target.value)}
+                    aria-label="Graph ticker"
+                  >
+                    {tickers.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                <EventGraphToggle
+                  open={showGraph}
+                  disabled={!span || !activeTicker}
+                  onToggle={() => setShowGraph((v) => !v)}
+                />
+              </div>
+            }
+          >
+            {showGraph && span && activeTicker ? (
+              <EventPriceChart
+                ticker={activeTicker}
+                fromNs={span.fromNs}
+                toNs={span.toNs}
+                events={eventsQuery.data ?? []}
+              />
+            ) : null}
             <EventTimeline
               events={eventsQuery.data}
               loading={eventsQuery.isLoading}

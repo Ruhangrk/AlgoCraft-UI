@@ -1,8 +1,12 @@
 import { Link, useParams } from "react-router-dom";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as api from "@/api/endpoints";
 import { ActivityResultHeader } from "@/components/ActivityResultHeader";
+import { DailyValueTable } from "@/components/DailyValueTable";
+import { EventGraphToggle, EventPriceChart, eventSpanNs } from "@/components/EventPriceChart";
 import { EventTimeline } from "@/components/EventTimeline";
+import { buildDailyEquityFromFills } from "@/lib/containerDailyEquity";
 import { formatNs, formatPaise } from "@/lib/format";
 import { ApiError, type RunEventLayer } from "@/types/api";
 import { EmptyState, PageShell, Panel, Stat } from "@/components/ui";
@@ -24,6 +28,9 @@ export function BacktestDetailPage() {
   const { workbookId = "", backtestId = "" } = useParams();
   const wid = Number(workbookId);
   const bid = Number(backtestId);
+  const [showGraph, setShowGraph] = useState(false);
+  const [focusDay, setFocusDay] = useState<string | null>(null);
+  const [focusSeq, setFocusSeq] = useState(0);
 
   const detailQuery = useQuery({
     queryKey: ["backtests", wid, bid],
@@ -38,6 +45,18 @@ export function BacktestDetailPage() {
   });
 
   const row = detailQuery.data;
+  const span = useMemo(() => {
+    if (row) {
+      return { fromNs: row.from_ns, toNs: row.to_ns };
+    }
+    return eventSpanNs(eventsQuery.data);
+  }, [row, eventsQuery.data]);
+
+  const dailyRows = useMemo(
+    () => buildDailyEquityFromFills(eventsQuery.data, row?.capital_paise),
+    [eventsQuery.data, row?.capital_paise],
+  );
+
   const eventsError =
     eventsQuery.error instanceof ApiError
       ? eventsQuery.error.message
@@ -92,7 +111,38 @@ export function BacktestDetailPage() {
             </div>
           </Panel>
 
-          <Panel title="Events">
+          <Panel title="Daily value">
+            <DailyValueTable
+              rows={dailyRows}
+              selectedDay={focusDay}
+              onSelectDay={(day) => {
+                setFocusDay(day);
+                setFocusSeq((n) => n + 1);
+                setShowGraph(true);
+              }}
+            />
+          </Panel>
+
+          <Panel
+            title="Events"
+            action={
+              <EventGraphToggle
+                open={showGraph}
+                disabled={!span}
+                onToggle={() => setShowGraph((v) => !v)}
+              />
+            }
+          >
+            {showGraph && span ? (
+              <EventPriceChart
+                ticker={row.ticker}
+                fromNs={span.fromNs}
+                toNs={span.toNs}
+                events={eventsQuery.data ?? []}
+                focusDay={focusDay}
+                focusSeq={focusSeq}
+              />
+            ) : null}
             <EventTimeline
               events={eventsQuery.data}
               loading={eventsQuery.isLoading}

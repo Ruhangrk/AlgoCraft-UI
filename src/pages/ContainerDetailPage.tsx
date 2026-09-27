@@ -1,7 +1,11 @@
 import { Link, useParams } from "react-router-dom";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as api from "@/api/endpoints";
+import { EventGraphToggle, EventPriceChart, eventSpanNs } from "@/components/EventPriceChart";
 import { EventTimeline } from "@/components/EventTimeline";
+import { DailyValueTable } from "@/components/DailyValueTable";
+import { buildDailyEquityFromFills } from "@/lib/containerDailyEquity";
 import { formatPaise } from "@/lib/format";
 import { ApiError, type RunEventLayer } from "@/types/api";
 import { EmptyState, PageShell, Panel, Stat } from "@/components/ui";
@@ -18,6 +22,9 @@ export function ContainerDetailPage() {
   const { workbookId = "", containerId = "" } = useParams();
   const wid = Number(workbookId);
   const cid = Number(containerId);
+  const [showGraph, setShowGraph] = useState(false);
+  const [focusDay, setFocusDay] = useState<string | null>(null);
+  const [focusSeq, setFocusSeq] = useState(0);
 
   const detailQuery = useQuery({
     queryKey: ["containers", wid, cid],
@@ -35,6 +42,13 @@ export function ContainerDetailPage() {
   const realized = row?.realized_paise ?? 0;
   const positive = realized >= 0;
   const pnlColor = positive ? "var(--color-gain)" : "var(--color-loss)";
+
+  const span = useMemo(() => eventSpanNs(eventsQuery.data), [eventsQuery.data]);
+
+  const dailyRows = useMemo(
+    () => buildDailyEquityFromFills(eventsQuery.data, row?.allocation_paise),
+    [eventsQuery.data, row?.allocation_paise],
+  );
 
   const eventsError =
     eventsQuery.error instanceof ApiError
@@ -134,7 +148,48 @@ export function ContainerDetailPage() {
             </div>
           </Panel>
 
-          <Panel title="Events">
+          <Panel title="Daily value">
+            <DailyValueTable
+              rows={dailyRows}
+              selectedDay={focusDay}
+              missingCapitalReason={
+                row.allocation_paise == null
+                  ? "Need allocation_paise to reconstruct starting capital per day."
+                  : null
+              }
+              onSelectDay={(day) => {
+                setFocusDay(day);
+                setFocusSeq((n) => n + 1);
+                setShowGraph(true);
+              }}
+            />
+          </Panel>
+
+          <Panel
+            title="Events"
+            action={
+              <EventGraphToggle
+                open={showGraph}
+                disabled={!span}
+                onToggle={() => setShowGraph((v) => !v)}
+              />
+            }
+          >
+            {showGraph && span ? (
+              <EventPriceChart
+                ticker={row.ticker}
+                fromNs={span.fromNs}
+                toNs={span.toNs}
+                events={eventsQuery.data ?? []}
+                focusDay={focusDay}
+                focusSeq={focusSeq}
+              />
+            ) : null}
+            {!span && !eventsQuery.isLoading ? (
+              <p className="mb-3 text-xs text-[var(--color-ink-muted)]">
+                Event graph needs timestamps — no events yet (container has no from/to on API).
+              </p>
+            ) : null}
             <EventTimeline
               events={eventsQuery.data}
               loading={eventsQuery.isLoading}

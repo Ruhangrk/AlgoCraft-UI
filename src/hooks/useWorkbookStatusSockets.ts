@@ -29,9 +29,9 @@ export function useWorkbookStatusSockets(workbookId: number, enabled: boolean): 
       ws.onmessage = (ev) => {
         try {
           const data = JSON.parse(String(ev.data)) as unknown;
+          // Push into RQ cache only — do not invalidate HTTP (that would poll).
           if (channel === "portfolio") {
             queryClient.setQueryData(["portfolio", workbookId], data as PortfolioSnapshot);
-            void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
           } else {
             queryClient.setQueryData(["containers", workbookId], data as ContainerRow[]);
           }

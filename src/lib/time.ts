@@ -67,6 +67,16 @@ export function istTodayYmd(): string {
   }).format(new Date());
 }
 
+/** Epoch ns → civil YYYY-MM-DD in IST. */
+export function nsToIstYmd(ns: number): string {
+  const istMs = Math.floor(ns / 1_000_000) + IST_OFFSET_MS;
+  const d = new Date(istMs);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function formatReturnPct(returnPct: number): string {
   const sign = returnPct > 0 ? "+" : "";
   return `${sign}${returnPct.toFixed(2)}%`;

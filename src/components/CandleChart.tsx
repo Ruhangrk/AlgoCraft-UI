@@ -3,11 +3,17 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { OhlcvCandle } from "@/types/api";
+
+export type CandleMarker = SeriesMarker<UTCTimestamp>;
 
 function toChartRows(candles: OhlcvCandle[]) {
   return candles
@@ -23,10 +29,12 @@ function toChartRows(candles: OhlcvCandle[]) {
 
 export function CandleChart({
   candles,
+  markers = [],
   height = 420,
   intraday = false,
 }: {
   candles: OhlcvCandle[];
+  markers?: CandleMarker[];
   height?: number;
   /** Show clock time on the axis (for 1m bars). */
   intraday?: boolean;
@@ -34,6 +42,7 @@ export function CandleChart({
   const hostRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const markersApiRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   useEffect(() => {
     const el = hostRef.current;
@@ -72,6 +81,7 @@ export function CandleChart({
 
     chartRef.current = chart;
     seriesRef.current = series;
+    markersApiRef.current = createSeriesMarkers(series, []);
 
     const ro = new ResizeObserver(() => {
       if (hostRef.current) {
@@ -83,6 +93,7 @@ export function CandleChart({
 
     return () => {
       ro.disconnect();
+      markersApiRef.current = null;
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -101,6 +112,10 @@ export function CandleChart({
       chart.timeScale().fitContent();
     }
   }, [candles]);
+
+  useEffect(() => {
+    markersApiRef.current?.setMarkers(markers);
+  }, [markers]);
 
   return <div ref={hostRef} className="w-full overflow-hidden rounded-lg" style={{ height }} />;
 }
