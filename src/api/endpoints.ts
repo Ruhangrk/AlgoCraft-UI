@@ -92,6 +92,13 @@ export function addWorkbookCapital(
   });
 }
 
+/** Soft-delete workbook (sets deleted_at; row kept in DB). */
+export function deleteWorkbook(
+  workbookId: number,
+): Promise<{ id: number; deleted: boolean }> {
+  return apiFetch(`/workbooks/${workbookId}`, { method: "DELETE" });
+}
+
 export function getPortfolio(workbookId: number): Promise<PortfolioSnapshot> {
   return apiFetch<PortfolioSnapshot>(`/workbooks/${workbookId}/portfolio`);
 }
@@ -211,4 +218,13 @@ export function getOhlcv(
   return apiFetch<OhlcvResponse>(
     `/instruments/${encodeURIComponent(ticker)}/ohlcv?${params}`,
   );
+}
+
+/** SSE status stream paths (auth via ?token= — used by EventSource). */
+export function workbookStreamPath(
+  workbookId: number,
+  channel: "portfolio" | "containers",
+  token: string,
+): string {
+  return `/workbooks/${workbookId}/stream/${channel}?token=${encodeURIComponent(token)}`;
 }

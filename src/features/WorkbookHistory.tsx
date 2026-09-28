@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/api/endpoints";
 import { formatPaise } from "@/lib/format";
-import { clearJson, PrefKeys, loadJson, saveJson } from "@/lib/prefs";
+import { clearJson, historyFilterKey, loadJson, saveJson } from "@/lib/prefs";
 import { formatReturnPct } from "@/lib/time";
 import { ApiError, type BacktestRow, type RunSummary } from "@/types/api";
 import { Button, EmptyState, Field, TextInput } from "@/components/ui";
@@ -31,9 +31,13 @@ export function WorkbookHistory({
   onTabChange: (tab: HistoryTab) => void;
 }) {
   const queryClient = useQueryClient();
+  const prefKey = historyFilterKey(workbookId);
   const historyPref = useMemo(
-    () => loadJson<HistoryFilterPref>(PrefKeys.historyFilter),
-    [],
+    () =>
+      Number.isFinite(workbookId) && workbookId > 0
+        ? loadJson<HistoryFilterPref>(prefKey)
+        : null,
+    [workbookId, prefKey],
   );
   const [q, setQ] = useState("");
   const [from, setFrom] = useState(() => historyPref?.from ?? "");
@@ -41,14 +45,37 @@ export function WorkbookHistory({
   const [cursor, setCursor] = useState(0);
   const [extraRuns, setExtraRuns] = useState<RunSummary[]>([]);
   const [extraBts, setExtraBts] = useState<BacktestRow[]>([]);
+  const suppressSave = useRef(true);
 
   useEffect(() => {
-    if (!from && !to) {
-      clearJson(PrefKeys.historyFilter);
+    suppressSave.current = true;
+    const pref =
+      Number.isFinite(workbookId) && workbookId > 0
+        ? loadJson<HistoryFilterPref>(historyFilterKey(workbookId))
+        : null;
+    setFrom(pref?.from ?? "");
+    setTo(pref?.to ?? "");
+    setQ("");
+    setCursor(0);
+    setExtraRuns([]);
+    setExtraBts([]);
+  }, [workbookId]);
+
+  useEffect(() => {
+    if (!Number.isFinite(workbookId) || workbookId <= 0) {
       return;
     }
-    saveJson(PrefKeys.historyFilter, { from, to });
-  }, [from, to]);
+    if (suppressSave.current) {
+      suppressSave.current = false;
+      return;
+    }
+    const key = historyFilterKey(workbookId);
+    if (!from && !to) {
+      clearJson(key);
+      return;
+    }
+    saveJson(key, { from, to });
+  }, [workbookId, from, to]);
 
   useEffect(() => {
     setCursor(0);
@@ -213,7 +240,7 @@ export function WorkbookHistory({
           />
         ) : (
           <HistoryTable>
-            <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
+            <thead className="sticky top-0 z-[1] bg-[var(--color-panel)] text-xs tracking-wide text-[var(--color-ink-muted)] uppercase shadow-[0_1px_0_var(--color-line)]">
               <tr>
                 <th className="pb-2 font-medium">Id</th>
                 <th className="pb-2 font-medium">When</th>
@@ -270,7 +297,7 @@ export function WorkbookHistory({
         <EmptyState title="No runs match" body="Start a routing run or widen filters." />
       ) : (
         <HistoryTable>
-          <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
+          <thead className="sticky top-0 z-[1] bg-[var(--color-panel)] text-xs tracking-wide text-[var(--color-ink-muted)] uppercase shadow-[0_1px_0_var(--color-line)]">
             <tr>
               <th className="pb-2 font-medium">Id</th>
               <th className="pb-2 font-medium">When</th>
@@ -330,8 +357,11 @@ export function WorkbookHistory({
 
 function HistoryTable({ children }: { children: ReactNode }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[560px] text-left text-sm">{children}</table>
+    <div className="max-h-[26rem] overflow-auto">
+      <table className="w-full min-w-[560px] text-left text-sm">
+        {/* sticky header is applied by callers via thead className when needed */}
+        {children}
+      </table>
     </div>
   );
 }

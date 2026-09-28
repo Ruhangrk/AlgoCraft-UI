@@ -32,9 +32,9 @@ export function DailyValueTable({
   return (
     <>
       <p className="mb-3 text-xs text-[var(--color-ink-muted)]">
-        Reconstructed from starting capital + fills (IST days). Open qty marked at last
-        trade price that day — not engine MTM.
-        {onSelectDay ? " Click a day to show that full day on the event graph." : ""}
+        Reconstructed from starting capital + fills (IST days). Every day in the activity
+        span is listed — zero-fill days show ₹0 P&amp;L. Open qty marked at last trade price
+        (not engine MTM). Click a day to show that full day on the event graph.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[520px] text-left text-sm">

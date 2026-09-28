@@ -1,4 +1,4 @@
-import { nsToIstYmd } from "@/lib/time";
+import { nsToIstYmd, shiftYmd } from "@/lib/time";
 import type { RunEvent } from "@/types/api";
 
 export type DailyEquityRow = {
@@ -26,14 +26,32 @@ function fillSide(side: string): "buy" | "sell" | null {
   return null;
 }
 
+function eachYmdInclusive(from: string, to: string): string[] {
+  if (!from || !to || from > to) {
+    return [];
+  }
+  const out: string[] = [];
+  let cur = from;
+  while (true) {
+    out.push(cur);
+    if (cur >= to) {
+      break;
+    }
+    cur = shiftYmd(cur, 1);
+  }
+  return out;
+}
+
 /**
  * Reconstruct per-day equity from allocation + fill stream.
- * Open inventory is marked at the last trade price seen that day (carry-forward).
+ * Includes every IST calendar day in range (or first→last fill day), even with 0 fills.
+ * Open inventory is marked at the last trade price seen (carry-forward).
  * Not engine MTM — approximate from events we already have.
  */
 export function buildDailyEquityFromFills(
   events: RunEvent[] | undefined,
   allocationPaise: number | null | undefined,
+  range?: { fromNs: number; toNs: number } | null,
 ): DailyEquityRow[] {
   if (allocationPaise == null || !Number.isFinite(allocationPaise)) {
     return [];
@@ -43,14 +61,6 @@ export function buildDailyEquityFromFills(
     .filter((e): e is Extract<RunEvent, { type: "fill" }> => e.type === "fill")
     .slice()
     .sort((a, b) => a.timestamp_ns - b.timestamp_ns || a.id - b.id);
-
-  if (fills.length === 0) {
-    return [];
-  }
-
-  let cash = allocationPaise;
-  let qty = 0;
-  let markPaise = 0;
 
   const byDay = new Map<string, typeof fills>();
   for (const f of fills) {
@@ -63,12 +73,27 @@ export function buildDailyEquityFromFills(
     }
   }
 
-  const days = [...byDay.keys()].sort();
+  let boundFrom: string;
+  let boundTo: string;
+  if (range && range.fromNs > 0 && range.toNs >= range.fromNs) {
+    boundFrom = nsToIstYmd(range.fromNs);
+    boundTo = nsToIstYmd(range.toNs);
+  } else if (fills.length > 0) {
+    const fillDays = [...byDay.keys()].sort();
+    boundFrom = fillDays[0];
+    boundTo = fillDays[fillDays.length - 1];
+  } else {
+    return [];
+  }
+
+  let cash = allocationPaise;
+  let qty = 0;
+  let markPaise = 0;
   const rows: DailyEquityRow[] = [];
 
-  for (const day of days) {
+  for (const day of eachYmdInclusive(boundFrom, boundTo)) {
     const startEquity = cash + qty * markPaise;
-    const dayFills = byDay.get(day)!;
+    const dayFills = byDay.get(day) ?? [];
     for (const f of dayFills) {
       const side = fillSide(String(f.data.side ?? ""));
       const px = f.data.price_paise;

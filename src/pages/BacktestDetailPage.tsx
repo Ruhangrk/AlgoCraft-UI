@@ -53,8 +53,13 @@ export function BacktestDetailPage() {
   }, [row, eventsQuery.data]);
 
   const dailyRows = useMemo(
-    () => buildDailyEquityFromFills(eventsQuery.data, row?.capital_paise),
-    [eventsQuery.data, row?.capital_paise],
+    () =>
+      buildDailyEquityFromFills(
+        eventsQuery.data,
+        row?.capital_paise,
+        row ? { fromNs: row.from_ns, toNs: row.to_ns } : null,
+      ),
+    [eventsQuery.data, row],
   );
 
   const eventsError =

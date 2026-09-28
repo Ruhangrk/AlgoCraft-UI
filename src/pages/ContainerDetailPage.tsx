@@ -46,8 +46,13 @@ export function ContainerDetailPage() {
   const span = useMemo(() => eventSpanNs(eventsQuery.data), [eventsQuery.data]);
 
   const dailyRows = useMemo(
-    () => buildDailyEquityFromFills(eventsQuery.data, row?.allocation_paise),
-    [eventsQuery.data, row?.allocation_paise],
+    () =>
+      buildDailyEquityFromFills(
+        eventsQuery.data,
+        row?.allocation_paise,
+        span ? { fromNs: span.fromNs, toNs: span.toNs } : null,
+      ),
+    [eventsQuery.data, row?.allocation_paise, span],
   );
 
   const eventsError =

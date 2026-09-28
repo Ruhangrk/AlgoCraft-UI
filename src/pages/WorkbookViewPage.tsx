@@ -1,14 +1,26 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/api/endpoints";
 import { InstrumentSearch } from "@/components/InstrumentSearch";
 import { WorkbookHistory, type HistoryTab } from "@/features/WorkbookHistory";
-import { useWorkbookStatusSockets } from "@/hooks/useWorkbookStatusSockets";
+import {
+  containersLiveKey,
+  useWorkbookStatusStream,
+  type LiveContainerSnap,
+} from "@/hooks/useWorkbookStatusStream";
 import { formatNs, formatPaise, rupeesToPaise } from "@/lib/format";
-import { PrefKeys, loadJson, saveJson } from "@/lib/prefs";
+import {
+  PrefKeys,
+  clearJson,
+  historyFilterKey,
+  loadJson,
+  saveJson,
+  workbookFormKey,
+  type WorkbookFormPrefs,
+} from "@/lib/prefs";
 import { istDateToNs, istTodayYmd } from "@/lib/time";
-import { ApiError, type RunStartResponse } from "@/types/api";
+import { ApiError, type ContainerRow, type RunStartResponse } from "@/types/api";
 import {
   Button,
   EmptyState,
@@ -21,10 +33,27 @@ import {
 } from "@/components/ui";
 
 const PREFILL_KEY = "algocraft_prefill_ticker";
-const DEFAULT_TICKERS = ["RELIANCE", "INFY", "TCS"];
-const DEFAULT_STRATEGIES = "ema_crossover,vwap_reversion,opening_range_breakout";
-const DEFAULT_TRADE_FROM = "09:15";
-const DEFAULT_TRADE_TO = "15:30";
+
+function loadWorkbookForm(workbookId: number): WorkbookFormPrefs {
+  if (!Number.isFinite(workbookId) || workbookId <= 0) {
+    return {};
+  }
+  const key = workbookFormKey(workbookId);
+  const stored = loadJson<WorkbookFormPrefs>(key);
+  if (stored) {
+    return stored;
+  }
+  // One-time migrate from older global date-only prefs.
+  const routing = loadJson<{
+    anchorDate?: string;
+  }>(PrefKeys.routingRun);
+  const backtest = loadJson<{ from?: string; to?: string }>(PrefKeys.backtestDates);
+  return {
+    anchorDate: routing?.anchorDate,
+    btFrom: backtest?.from,
+    btTo: backtest?.to,
+  };
+}
 
 export function WorkbookViewPage() {
   const { workbookId = "" } = useParams();
@@ -35,71 +64,101 @@ export function WorkbookViewPage() {
 
   const tab: HistoryTab = searchParams.get("tab") === "backtests" ? "backtests" : "runs";
 
-  const [capitalRupees, setCapitalRupees] = useState("");
-  const [tickers, setTickers] = useState<string[]>(DEFAULT_TICKERS);
-  const [strategies, setStrategies] = useState(DEFAULT_STRATEGIES);
-  const [router, setRouter] = useState("default_router");
-  const routingPref = useMemo(
-    () => loadJson<{
-      anchorDate?: string;
-      evalSessions?: string;
-      tradeFrom?: string;
-      tradeTo?: string;
-      useSessionWindow?: boolean;
-    }>(PrefKeys.routingRun),
-    [],
-  );
-  const backtestPref = useMemo(
-    () => loadJson<{ from?: string; to?: string }>(PrefKeys.backtestDates),
-    [],
-  );
+  const initial = useMemo(() => loadWorkbookForm(wid), [wid]);
 
+  const [capitalRupees, setCapitalRupees] = useState(() => initial.capitalRupees ?? "");
+  const [router, setRouter] = useState(() => initial.router || "default_router");
   const [anchorDate, setAnchorDate] = useState(
-    () => routingPref?.anchorDate || istTodayYmd(),
-  );
-  const [evalSessions, setEvalSessions] = useState(
-    () => routingPref?.evalSessions || "14",
-  );
-  const [tradeFrom, setTradeFrom] = useState(
-    () => routingPref?.tradeFrom || DEFAULT_TRADE_FROM,
-  );
-  const [tradeTo, setTradeTo] = useState(
-    () => routingPref?.tradeTo || DEFAULT_TRADE_TO,
-  );
-  const [useSessionWindow, setUseSessionWindow] = useState(
-    () => routingPref?.useSessionWindow ?? true,
+    () => initial.anchorDate || istTodayYmd(),
   );
   const [liveActive, setLiveActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<RunStartResponse | null>(null);
 
-  const [btTicker, setBtTicker] = useState("RELIANCE");
-  const [btStrategy, setBtStrategy] = useState("ema_crossover");
-  const [btFrom, setBtFrom] = useState(() => backtestPref?.from || "2026-08-28");
-  const [btTo, setBtTo] = useState(() => backtestPref?.to || "2026-09-11");
-  const [btCapital, setBtCapital] = useState("100000");
+  const [btTicker, setBtTicker] = useState(() => initial.btTicker || "RELIANCE");
+  const [btStrategy, setBtStrategy] = useState(
+    () => initial.btStrategy || "ema_crossover",
+  );
+  const [btFrom, setBtFrom] = useState(() => initial.btFrom || "2026-08-28");
+  const [btTo, setBtTo] = useState(() => initial.btTo || "2026-09-11");
+  const [btCapital, setBtCapital] = useState(() => initial.btCapital || "100000");
   const [btError, setBtError] = useState<string | null>(null);
 
-  const [rechargeRupees, setRechargeRupees] = useState("100000");
+  const [rechargeRupees, setRechargeRupees] = useState(
+    () => initial.rechargeRupees || "100000",
+  );
   const [rechargeError, setRechargeError] = useState<string | null>(null);
   const [rechargeOk, setRechargeOk] = useState<string | null>(null);
+  const [hideError, setHideError] = useState<string | null>(null);
 
-  const [fillTicker, setFillTicker] = useState<string>("all");
-  const [fillSide, setFillSide] = useState<"all" | "buy" | "sell">("all");
+  const [fillTicker, setFillTicker] = useState<string>(() => initial.fillTicker || "all");
+  const [fillSide, setFillSide] = useState<"all" | "buy" | "sell">(
+    () => initial.fillSide || "all",
+  );
+
+  /** Skip one save after load/switch so we don't write the previous workbook's values. */
+  const suppressSave = useRef(true);
+
+  // Reload form when navigating to a different workbook.
+  useEffect(() => {
+    suppressSave.current = true;
+    const p = loadWorkbookForm(wid);
+    setCapitalRupees(p.capitalRupees ?? "");
+    setRouter(p.router || "default_router");
+    setAnchorDate(p.anchorDate || istTodayYmd());
+    setBtTicker(p.btTicker || "RELIANCE");
+    setBtStrategy(p.btStrategy || "ema_crossover");
+    setBtFrom(p.btFrom || "2026-08-28");
+    setBtTo(p.btTo || "2026-09-11");
+    setBtCapital(p.btCapital || "100000");
+    setRechargeRupees(p.rechargeRupees || "100000");
+    setFillTicker(p.fillTicker || "all");
+    setFillSide(p.fillSide || "all");
+    setLiveActive(false);
+    setError(null);
+    setLastResult(null);
+    setBtError(null);
+    setRechargeError(null);
+    setRechargeOk(null);
+    setHideError(null);
+  }, [wid]);
 
   useEffect(() => {
-    saveJson(PrefKeys.routingRun, {
+    if (!Number.isFinite(wid) || wid <= 0) {
+      return;
+    }
+    if (suppressSave.current) {
+      suppressSave.current = false;
+      return;
+    }
+    const blob: WorkbookFormPrefs = {
+      capitalRupees,
+      router,
       anchorDate,
-      evalSessions,
-      tradeFrom,
-      tradeTo,
-      useSessionWindow,
-    });
-  }, [anchorDate, evalSessions, tradeFrom, tradeTo, useSessionWindow]);
-
-  useEffect(() => {
-    saveJson(PrefKeys.backtestDates, { from: btFrom, to: btTo });
-  }, [btFrom, btTo]);
+      btTicker,
+      btStrategy,
+      btFrom,
+      btTo,
+      btCapital,
+      rechargeRupees,
+      fillTicker,
+      fillSide,
+    };
+    saveJson(workbookFormKey(wid), blob);
+  }, [
+    wid,
+    capitalRupees,
+    router,
+    anchorDate,
+    btTicker,
+    btStrategy,
+    btFrom,
+    btTo,
+    btCapital,
+    rechargeRupees,
+    fillTicker,
+    fillSide,
+  ]);
 
   useEffect(() => {
     const fromUrl = searchParams.get("ticker")?.toUpperCase();
@@ -108,7 +167,6 @@ export function WorkbookViewPage() {
     if (!prefill) {
       return;
     }
-    setTickers((prev) => (prev.includes(prefill) ? prev : [prefill, ...prev]));
     setBtTicker(prefill);
     sessionStorage.removeItem(PREFILL_KEY);
     if (fromUrl) {
@@ -118,7 +176,7 @@ export function WorkbookViewPage() {
     }
   }, [searchParams, setSearchParams]);
 
-  useWorkbookStatusSockets(wid, Number.isFinite(wid) && wid > 0);
+  useWorkbookStatusStream(wid, Number.isFinite(wid) && wid > 0);
 
   const todayIst = istTodayYmd();
   const isLiveAnchor = anchorDate === todayIst;
@@ -157,6 +215,37 @@ export function WorkbookViewPage() {
     enabled: Number.isFinite(wid) && wid > 0 && tab === "runs",
   });
 
+  /** Live-run SSE overlay — not a full workbook list. */
+  const liveContainersQuery = useQuery({
+    queryKey: containersLiveKey(wid),
+    queryFn: async (): Promise<LiveContainerSnap[]> => [],
+    initialData: [],
+    staleTime: Infinity,
+    enabled: Number.isFinite(wid) && wid > 0,
+  });
+
+  const displayedContainers = useMemo(() => {
+    const history = containersQuery.data ?? [];
+    const live = liveContainersQuery.data ?? [];
+    if (live.length === 0) {
+      return history.map((c) => ({ kind: "history" as const, row: c }));
+    }
+    const liveRows = live.map((s, i) => {
+      const row: ContainerRow = {
+        id: -(i + 1),
+        workbook_id: s.workbook_id ?? wid,
+        ticker: s.ticker ?? "",
+        strategy: s.strategy ?? "",
+        mode: s.mode || "live",
+        allocation_paise: s.allocation_paise,
+        realized_paise: s.realized_paise ?? 0,
+        fills: s.fills ?? 0,
+      };
+      return { kind: "live" as const, row };
+    });
+    return [...liveRows, ...history.map((c) => ({ kind: "history" as const, row: c }))];
+  }, [containersQuery.data, liveContainersQuery.data, wid]);
+
   const fillsQuery = useQuery({
     queryKey: ["fills", wid],
     queryFn: () => api.listFills(wid),
@@ -193,18 +282,11 @@ export function WorkbookViewPage() {
   const startMutation = useMutation({
     mutationFn: () => {
       const body: Parameters<typeof api.startRun>[1] = {
-        tickers,
-        strategies: splitCsv(strategies),
         router,
         anchor_date: anchorDate,
-        eval_sessions: Math.max(1, Number(evalSessions) || 14),
       };
       if (capitalRupees.trim()) {
         body.capital_paise = rupeesToPaise(Number(capitalRupees));
-      }
-      if (useSessionWindow) {
-        body.trade_from = tradeFrom || DEFAULT_TRADE_FROM;
-        body.trade_to = tradeTo || DEFAULT_TRADE_TO;
       }
       return api.startRun(wid, body);
     },
@@ -234,6 +316,7 @@ export function WorkbookViewPage() {
     onSuccess: (res) => {
       setLiveActive(false);
       setError(null);
+      queryClient.setQueryData(containersLiveKey(wid), []);
       void queryClient.invalidateQueries({ queryKey: ["runs", wid] });
       void queryClient.invalidateQueries({ queryKey: ["containers", wid] });
       void queryClient.invalidateQueries({ queryKey: ["fills", wid] });
@@ -261,7 +344,7 @@ export function WorkbookViewPage() {
       setBtError(null);
       // Simulated capital only — workbook balance unchanged.
       void queryClient.invalidateQueries({ queryKey: ["backtests", wid] });
-      setSearchParams({ tab: "backtests" });
+      setSearchParams({ tab: "backtests" });  
       navigate(`/workbooks/${wid}/backtests/${row.id}`);
     },
     onError: (err) => {
@@ -283,12 +366,41 @@ export function WorkbookViewPage() {
     },
   });
 
-  function onStartRun(e: FormEvent) {
-    e.preventDefault();
-    if (tickers.length === 0) {
-      setError("Add at least one ticker");
+  const hideWorkbookMutation = useMutation({
+    mutationFn: () => api.deleteWorkbook(wid),
+    onSuccess: () => {
+      setHideError(null);
+      clearJson(workbookFormKey(wid));
+      clearJson(historyFilterKey(wid));
+      void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
+      navigate("/workbooks");
+    },
+    onError: (err) => {
+      setHideError(err instanceof ApiError ? err.message : "Hide workbook failed");
+    },
+  });
+
+  function confirmHideWorkbook() {
+    const label = workbook?.name ?? `Workbook #${wid}`;
+    if (
+      !window.confirm(
+        `Hide "${label}" (#${wid}) from your list?\n\nSoft-delete only — SQLite keeps the row. You will leave this page.`,
+      )
+    ) {
       return;
     }
+    if (
+      !window.confirm(
+        `Final confirm: hide workbook #${wid}?\n\nType is not required; this is the last step before calling DELETE.`,
+      )
+    ) {
+      return;
+    }
+    hideWorkbookMutation.mutate();
+  }
+
+  function onStartRun(e: FormEvent) {
+    e.preventDefault();
     setLastResult(null);
     startMutation.mutate();
   }
@@ -350,14 +462,25 @@ export function WorkbookViewPage() {
       title={title}
       subtitle="Capital, launch experiments, and browse permanent history for this workbook."
       actions={
-        <Link
-          to="/workbooks"
-          className="text-sm font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-        >
-          ← Workbooks
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={hideWorkbookMutation.isPending || !Number.isFinite(wid) || wid <= 0}
+            onClick={confirmHideWorkbook}
+          >
+            {hideWorkbookMutation.isPending ? "Hiding…" : "Hide workbook"}
+          </Button>
+          <Link
+            to="/workbooks"
+            className="text-sm font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          >
+            ← Workbooks
+          </Link>
+        </div>
       }
     >
+      {hideError ? <ErrorBanner message={hideError} /> : null}
       <div className="space-y-6">
         <Panel title="Capital">
           <div className="grid gap-4 sm:grid-cols-3">
@@ -448,7 +571,7 @@ export function WorkbookViewPage() {
                   hint={
                     isLiveAnchor
                       ? "Equals IST today → live Upstox tape until you stop."
-                      : "Past session → hist replay (eval window shifts back from this day)."
+                      : "Past session → hist replay (backend picks universe / eval)."
                   }
                 >
                   <TextInput
@@ -462,55 +585,6 @@ export function WorkbookViewPage() {
                 <p className="font-mono text-[10px] text-[var(--color-ink-muted)]">
                   Mode: {isLiveAnchor ? "live" : "hist_replay"} · IST today {todayIst}
                 </p>
-                <Field
-                  label="Eval sessions"
-                  hint="Prior closed days the router uses to score strategies (e.g. 14 or 20)."
-                >
-                  <TextInput
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={evalSessions}
-                    onChange={(e) => setEvalSessions(e.target.value)}
-                    required
-                    disabled={liveActive}
-                  />
-                </Field>
-                <label className="flex items-center gap-2 text-sm text-[var(--color-ink)]">
-                  <input
-                    type="checkbox"
-                    checked={useSessionWindow}
-                    disabled={liveActive}
-                    onChange={(e) => setUseSessionWindow(e.target.checked)}
-                  />
-                  Limit trade window (IST)
-                </label>
-                {useSessionWindow ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="Trade from">
-                      <TextInput
-                        type="time"
-                        value={tradeFrom}
-                        onChange={(e) => setTradeFrom(e.target.value)}
-                        required
-                        disabled={liveActive}
-                      />
-                    </Field>
-                    <Field label="Trade to">
-                      <TextInput
-                        type="time"
-                        value={tradeTo}
-                        onChange={(e) => setTradeTo(e.target.value)}
-                        required
-                        disabled={liveActive}
-                      />
-                    </Field>
-                  </div>
-                ) : (
-                  <p className="text-xs text-[var(--color-ink-muted)]">
-                    Full NSE session used for the trade day.
-                  </p>
-                )}
                 <Field label="Capital (₹)" hint="Optional — defaults to workbook available. Borrowed for the run.">
                   <TextInput
                     type="number"
@@ -519,45 +593,6 @@ export function WorkbookViewPage() {
                     value={capitalRupees}
                     onChange={(e) => setCapitalRupees(e.target.value)}
                     placeholder="use available"
-                    disabled={liveActive}
-                  />
-                </Field>
-                <Field label="Tickers" hint="Search NSE catalog and add symbols.">
-                  <InstrumentSearch
-                    placeholder="Add stock…"
-                    disabled={liveActive}
-                    onSelect={(inst) =>
-                      setTickers((prev) =>
-                        prev.includes(inst.ticker) ? prev : [...prev, inst.ticker],
-                      )
-                    }
-                  />
-                  {tickers.length > 0 ? (
-                    <ul className="mt-2 flex flex-wrap gap-1.5">
-                      {tickers.map((t) => (
-                        <li key={t}>
-                          <button
-                            type="button"
-                            disabled={liveActive}
-                            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)] px-2 py-0.5 font-mono text-xs hover:border-[var(--color-danger)] disabled:opacity-50"
-                            onClick={() => setTickers((prev) => prev.filter((x) => x !== t))}
-                            title="Remove"
-                          >
-                            {t}
-                            <span aria-hidden>×</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-xs text-[var(--color-warn)]">No tickers selected</p>
-                  )}
-                </Field>
-                <Field label="Strategies">
-                  <TextInput
-                    value={strategies}
-                    onChange={(e) => setStrategies(e.target.value)}
-                    required
                     disabled={liveActive}
                   />
                 </Field>
@@ -586,7 +621,7 @@ export function WorkbookViewPage() {
                 {liveActive ? (
                   <div className="space-y-2">
                     <p className="rounded-lg border border-[var(--color-accent)] bg-[var(--color-paper)] px-3 py-2 text-sm text-[var(--color-ink)]">
-                      Live run active — portfolio &amp; containers update over WebSocket. Capital
+                      Live run active — portfolio &amp; containers update over live stream (SSE). Capital
                       settles when you stop.
                     </p>
                     <Button
@@ -604,10 +639,7 @@ export function WorkbookViewPage() {
                     type="submit"
                     className="w-full"
                     disabled={
-                      startMutation.isPending ||
-                      tickers.length === 0 ||
-                      !router ||
-                      routerOptions.length === 0
+                      startMutation.isPending || !router || routerOptions.length === 0
                     }
                   >
                     {startMutation.isPending
@@ -647,12 +679,12 @@ export function WorkbookViewPage() {
             {tab === "runs" ? (
               <>
                 <Panel title="Containers (workbook)">
-                  {(containersQuery.data ?? []).length === 0 ? (
+                  {displayedContainers.length === 0 ? (
                     <EmptyState title="No containers" body="Appear after a successful run." />
                   ) : (
-                    <div className="overflow-x-auto">
+                    <div className="max-h-[26rem] overflow-auto">
                       <table className="w-full min-w-[600px] text-left text-sm">
-                        <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
+                        <thead className="sticky top-0 z-[1] bg-[var(--color-panel)] text-xs tracking-wide text-[var(--color-ink-muted)] uppercase shadow-[0_1px_0_var(--color-line)]">
                           <tr>
                             <th className="pb-2 font-medium">Id</th>
                             <th className="pb-2 font-medium">Run</th>
@@ -664,18 +696,27 @@ export function WorkbookViewPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[var(--color-line)]">
-                          {containersQuery.data?.map((c) => (
-                            <tr key={c.id} className="hover:bg-[var(--color-paper)]">
+                          {displayedContainers.map(({ kind, row: c }) => (
+                            <tr
+                              key={kind === "live" ? `live-${c.ticker}-${c.strategy}-${c.id}` : c.id}
+                              className="hover:bg-[var(--color-paper)]"
+                            >
                               <td className="py-2 font-mono">
-                                <Link
-                                  className="text-[var(--color-accent)] hover:underline"
-                                  to={`/workbooks/${wid}/containers/${c.id}`}
-                                >
-                                  {c.id}
-                                </Link>
+                                {kind === "live" || c.id <= 0 ? (
+                                  <span className="text-[var(--color-ink-muted)]">live</span>
+                                ) : (
+                                  <Link
+                                    className="text-[var(--color-accent)] hover:underline"
+                                    to={`/workbooks/${wid}/containers/${c.id}`}
+                                  >
+                                    {c.id}
+                                  </Link>
+                                )}
                               </td>
                               <td className="py-2 font-mono text-xs">
-                                {c.run_id != null ? (
+                                {kind === "live" ? (
+                                  <span className="text-[var(--color-accent)]">active</span>
+                                ) : c.run_id != null ? (
                                   <Link
                                     className="text-[var(--color-accent)] hover:underline"
                                     to={`/workbooks/${wid}/runs/${c.run_id}`}
@@ -686,9 +727,9 @@ export function WorkbookViewPage() {
                                   "—"
                                 )}
                               </td>
-                              <td className="py-2 font-medium">{c.ticker}</td>
-                              <td className="py-2">{c.strategy}</td>
-                              <td className="py-2 font-mono text-xs">{c.mode}</td>
+                              <td className="py-2 font-medium">{c.ticker || "—"}</td>
+                              <td className="py-2">{c.strategy || "—"}</td>
+                              <td className="py-2 font-mono text-xs">{c.mode || "—"}</td>
                               <td className="py-2 font-mono">
                                 {c.allocation_paise != null
                                   ? formatPaise(c.allocation_paise)
@@ -748,9 +789,9 @@ export function WorkbookViewPage() {
                           body="Widen instrument or side filters."
                         />
                       ) : (
-                        <div className="overflow-x-auto">
+                        <div className="max-h-[26rem] overflow-auto">
                           <table className="w-full min-w-[520px] text-left text-sm">
-                            <thead className="text-xs tracking-wide text-[var(--color-ink-muted)] uppercase">
+                            <thead className="sticky top-0 z-[1] bg-[var(--color-panel)] text-xs tracking-wide text-[var(--color-ink-muted)] uppercase shadow-[0_1px_0_var(--color-line)]">
                               <tr>
                                 <th className="pb-2 font-medium">Time</th>
                                 <th className="pb-2 font-medium">Ticker</th>
@@ -785,11 +826,4 @@ export function WorkbookViewPage() {
       </div>
     </PageShell>
   );
-}
-
-function splitCsv(value: string): string[] {
-  return value
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
 }

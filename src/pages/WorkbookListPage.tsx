@@ -47,9 +47,34 @@ export function WorkbookListPage() {
     },
   });
 
+  const hideMutation = useMutation({
+    mutationFn: (id: number) => api.deleteWorkbook(id),
+    onSuccess: () => {
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["workbooks"] });
+    },
+    onError: (err) => {
+      setError(err instanceof ApiError ? err.message : "Hide workbook failed");
+    },
+  });
+
   function onCreate(e: FormEvent) {
     e.preventDefault();
     createMutation.mutate();
+  }
+
+  function confirmHide(id: number, wbName: string) {
+    if (
+      !window.confirm(
+        `Hide "${wbName}" (#${id}) from your list?\n\nSoft-delete only — SQLite keeps the row.`,
+      )
+    ) {
+      return;
+    }
+    if (!window.confirm(`Final confirm: hide workbook #${id}?`)) {
+      return;
+    }
+    hideMutation.mutate(id);
   }
 
   const workbooks = listQuery.data ?? [];
@@ -127,12 +152,23 @@ export function WorkbookListPage() {
                       {formatPaise(wb.available_paise)}
                     </p>
                   </div>
-                  <Link
-                    to={`/workbooks/${wb.id}`}
-                    className="inline-flex items-center justify-center rounded-lg border border-[var(--color-line)] bg-white px-3.5 py-2 text-sm font-medium hover:bg-[var(--color-paper)]"
-                  >
-                    Open
-                  </Link>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-danger)]"
+                      disabled={hideMutation.isPending}
+                      onClick={() => confirmHide(wb.id, wb.name)}
+                    >
+                      Hide
+                    </Button>
+                    <Link
+                      to={`/workbooks/${wb.id}`}
+                      className="inline-flex items-center justify-center rounded-lg border border-[var(--color-line)] bg-white px-3.5 py-2 text-sm font-medium hover:bg-[var(--color-paper)]"
+                    >
+                      Open
+                    </Link>
+                  </div>
                 </li>
               ))}
             </ul>
