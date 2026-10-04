@@ -21,6 +21,12 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
+      // AlgoCraft-Agent FastAPI (JWT forwarded; catalog/sessions/chat/SSE/confirm).
+      "/agent": {
+        target: "http://127.0.0.1:8100",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/agent/, ""),
+      },
     },
   },
   build: {

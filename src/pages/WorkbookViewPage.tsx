@@ -176,7 +176,7 @@ export function WorkbookViewPage() {
     }
   }, [searchParams, setSearchParams]);
 
-  useWorkbookStatusStream(wid, Number.isFinite(wid) && wid > 0);
+  useWorkbookStatusStream(wid, liveActive && Number.isFinite(wid) && wid > 0);
 
   const todayIst = istTodayYmd();
   const isLiveAnchor = anchorDate === todayIst;

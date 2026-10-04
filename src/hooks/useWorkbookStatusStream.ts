@@ -21,9 +21,10 @@ export function containersLiveKey(workbookId: number) {
 }
 
 /**
- * Subscribe to Crow SSE status streams for a workbook.
- * Backend sends one event then closes; EventSource reconnects via retry: 2000.
- * Auth is ?token= (EventSource cannot set Authorization).
+ * Subscribe to Crow SSE status streams while a live run is active.
+ * Backend sends one snapshot then closes with `retry: 2000`; EventSource
+ * reconnects — that loop is intentional only during live. Do not enable
+ * on idle workbook pages (causes permanent reconnect spam).
  *
  * Portfolio → ["portfolio", wid] (full replace).
  * Containers → ["containers-live", wid] only — never wipe the HTTP history list.
@@ -34,6 +35,9 @@ export function useWorkbookStatusStream(workbookId: number, enabled: boolean): v
 
   useEffect(() => {
     if (!enabled || !token || !Number.isFinite(workbookId) || workbookId <= 0) {
+      if (!enabled && Number.isFinite(workbookId) && workbookId > 0) {
+        queryClient.setQueryData(containersLiveKey(workbookId), []);
+      }
       return;
     }
 

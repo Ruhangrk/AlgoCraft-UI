@@ -37,7 +37,14 @@ export const PrefKeys = {
   historyFilter: "algocraft.prefs.history_filter",
   /** @deprecated prefer workbookForm(wid) */
   routingRun: "algocraft.prefs.routing_run",
+  /** Agent side panel open + width */
+  agentPanel: "algocraft.prefs.agent_panel",
 } as const;
+
+export type AgentPanelPrefs = {
+  open?: boolean;
+  width?: number;
+};
 
 /** All workbook page form blanks — one blob per workbook id. */
 export function workbookFormKey(workbookId: number): string {
