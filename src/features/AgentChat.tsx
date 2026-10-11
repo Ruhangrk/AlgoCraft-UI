@@ -17,7 +17,11 @@ import {
   type ThinkingCrumb,
 } from "@/api/agent";
 import { ThinkingTrail } from "@/features/ThinkingTrail";
+import { AgentMarkdown } from "@/features/AgentMarkdown";
 import { Button, ErrorBanner, TextInput } from "@/components/ui";
+import { waitForStrategies } from "@/lib/waitForEngine";
+
+type EngineReloadStatus = "idle" | "waiting" | "ready" | "timeout";
 
 type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -175,6 +179,7 @@ export function AgentChat({
 }) {
   const queryClient = useQueryClient();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const engineWaitAbort = useRef<AbortController | null>(null);
 
   const [catalog, setCatalog] = useState<LlmCatalogResponse | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -189,6 +194,7 @@ export function AgentChat({
   const [busy, setBusy] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [engineReload, setEngineReload] = useState<EngineReloadStatus>("idle");
 
   const availableProviders = useMemo(
     () => (catalog?.providers ?? []).filter((p) => p.available),
@@ -201,7 +207,37 @@ export function AgentChat({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [messages, card, busy]);
+  }, [messages, card, busy, engineReload]);
+
+  useEffect(() => {
+    return () => {
+      engineWaitAbort.current?.abort();
+    };
+  }, []);
+
+  function startCatalogRefreshAfterActivate(strategyName: string | null) {
+    engineWaitAbort.current?.abort();
+    const ac = new AbortController();
+    engineWaitAbort.current = ac;
+    setEngineReload("waiting");
+
+    void (async () => {
+      const list = await waitForStrategies({
+        expectName: strategyName,
+        signal: ac.signal,
+      });
+      if (ac.signal.aborted) return;
+      if (!list) {
+        setEngineReload("timeout");
+        return;
+      }
+      // Only invalidate once the engine answers — avoids error spam while it is down.
+      await queryClient.invalidateQueries({ queryKey: ["catalog"] });
+      if (!ac.signal.aborted) {
+        setEngineReload("ready");
+      }
+    })();
+  }
 
   async function bootSession(refreshCatalog: boolean) {
     setBootError(null);
@@ -331,7 +367,9 @@ export function AgentChat({
     if (typeof name === "string") {
       setPendingStrategy(name);
     }
-    if (workbookId != null && workbookId > 0) {
+    // Activate recompiles/restarts AlgoCraft — do not poke C++ endpoints yet.
+    const isActivateConfirm = "action" in result && result.action === "activate";
+    if (workbookId != null && workbookId > 0 && !isActivateConfirm) {
       void queryClient.invalidateQueries({ queryKey: ["workbooks", workbookId] });
       void queryClient.invalidateQueries({ queryKey: ["backtests", workbookId] });
       void queryClient.invalidateQueries({ queryKey: ["runs", workbookId] });
@@ -421,6 +459,8 @@ export function AgentChat({
     if (!sessionId || busy) return;
     setBusy(true);
     setError(null);
+    // Capture before refreshPending clears pending_human / name.
+    const strategyForReload = pendingStrategy;
     try {
       const result = await postConfirm(sessionId, action);
       const thinking = normalizeThinking(result.thinking);
@@ -428,6 +468,15 @@ export function AgentChat({
       await refreshPending(sessionId);
       if (result.error) {
         setError(result.error);
+      } else if (action === "activate") {
+        // C++ recompiles + restarts; wait until /strategies is healthy, then refresh UI.
+        const nameFromCard =
+          typeof result.card?.strategy_name === "string"
+            ? result.card.strategy_name
+            : typeof result.card?.strategy === "string"
+              ? result.card.strategy
+              : null;
+        startCatalogRefreshAfterActivate(nameFromCard || strategyForReload);
       }
     } catch (e) {
       setError(e instanceof AgentApiError ? e.message : "Confirm failed");
@@ -562,8 +611,8 @@ export function AgentChat({
               </div>
             ) : (
               <div key={`asst-${i}`} className="mr-auto max-w-[95%]">
-                <div className="rounded-lg bg-[var(--color-paper)] px-3 py-2 text-sm whitespace-pre-wrap text-[var(--color-ink)]">
-                  {m.content}
+                <div className="rounded-lg bg-[var(--color-paper)] px-3 py-2">
+                  <AgentMarkdown content={m.content} />
                 </div>
                 {m.thinking && m.thinking.length > 0 ? (
                   <ThinkingTrail crumbs={m.thinking} defaultOpen={Boolean(m.thinkingOpen)} />
@@ -574,6 +623,21 @@ export function AgentChat({
         )}
         {busy ? (
           <p className="font-mono text-xs text-[var(--color-ink-muted)]">Agent running…</p>
+        ) : null}
+        {engineReload === "waiting" ? (
+          <p className="font-mono text-xs text-[var(--color-ink-muted)]">
+            Waiting for engine reload… strategy list will refresh when AlgoCraft is back.
+          </p>
+        ) : null}
+        {engineReload === "ready" ? (
+          <p className="font-mono text-xs text-[var(--color-accent)]">
+            Engine online — strategy list updated.
+          </p>
+        ) : null}
+        {engineReload === "timeout" ? (
+          <p className="font-mono text-xs text-[var(--color-danger)]">
+            Engine still unreachable. Refresh the workbook later once AlgoCraft is up.
+          </p>
         ) : null}
         <CardSummary card={card} />
         <div ref={bottomRef} />

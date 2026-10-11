@@ -8,14 +8,15 @@ import {
 } from "@/lib/prefs";
 
 const MIN_W = 280;
-const MAX_W = 720;
 const DEFAULT_W = 380;
+/** Cap as a fraction of viewport — no fixed px max (was 720 ≈ 37% on 1920). */
+const MAX_FRAC = 0.8;
 
 function clampWidth(w: number): number {
   const max =
     typeof window !== "undefined"
-      ? Math.min(MAX_W, Math.floor(window.innerWidth * 0.7))
-      : MAX_W;
+      ? Math.floor(window.innerWidth * MAX_FRAC)
+      : 1200;
   return Math.max(MIN_W, Math.min(max, Math.round(w)));
 }
 
